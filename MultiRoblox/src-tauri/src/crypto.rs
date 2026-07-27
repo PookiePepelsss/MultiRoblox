@@ -209,3 +209,111 @@ pub fn decrypt_electron_safe_storage(
 fn base64_maybe(s: &str) -> Option<Vec<u8>> {
     B64.decode(s).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Fixed keys throughout: derive_scrypt_key uses N=2^16, which takes ~340ms
+    // in release and far longer in a debug test build. The KDF is a thin
+    // wrapper over the scrypt crate; the format handling below is the part
+    // that's ours and that has to stay byte-compatible.
+    const KEY: [u8; KEY_LEN] = [7u8; KEY_LEN];
+    const OTHER_KEY: [u8; KEY_LEN] = [9u8; KEY_LEN];
+
+    #[test]
+    fn gcm_round_trips() {
+        let ct = encrypt_gcm("_|WARNING:-DO-NOT-SHARE-THIS", &KEY, "gs");
+        assert_eq!(decrypt_gcm(&ct, &KEY, "gs").as_deref(), Some("_|WARNING:-DO-NOT-SHARE-THIS"));
+    }
+
+    #[test]
+    fn gcm_round_trips_unicode_and_empty() {
+        for plain in ["", "ünïcödé ✓ 🎮", "a"] {
+            let ct = encrypt_gcm(plain, &KEY, "gs");
+            assert_eq!(decrypt_gcm(&ct, &KEY, "gs").as_deref(), Some(plain), "failed for {:?}", plain);
+        }
+    }
+
+    // tag:iv_b64:authtag_b64:data_b64 -- the shape the Electron build wrote and
+    // still reads. Changing it silently orphans every stored cookie.
+    #[test]
+    fn gcm_keeps_the_on_disk_layout() {
+        let ct = encrypt_gcm("hello", &KEY, "gs");
+        let parts: Vec<&str> = ct.split(':').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0], "gs");
+        assert_eq!(B64.decode(parts[1]).unwrap().len(), 12, "12-byte nonce");
+        assert_eq!(B64.decode(parts[2]).unwrap().len(), 16, "16-byte auth tag, stored separately");
+        assert_eq!(B64.decode(parts[3]).unwrap().len(), "hello".len(), "ciphertext without the tag");
+    }
+
+    #[test]
+    fn gcm_nonce_differs_per_encryption() {
+        let a = encrypt_gcm("same", &KEY, "gs");
+        let b = encrypt_gcm("same", &KEY, "gs");
+        assert_ne!(a, b, "a reused nonce under one key would be a real break");
+    }
+
+    #[test]
+    fn gcm_rejects_the_wrong_key() {
+        let ct = encrypt_gcm("secret", &KEY, "gs");
+        assert!(decrypt_gcm(&ct, &OTHER_KEY, "gs").is_none());
+    }
+
+    #[test]
+    fn gcm_rejects_a_tampered_payload() {
+        let ct = encrypt_gcm("secret", &KEY, "gs");
+        let mut parts: Vec<String> = ct.split(':').map(|s| s.to_string()).collect();
+        let mut data = B64.decode(&parts[3]).unwrap();
+        data[0] ^= 0xff;
+        parts[3] = B64.encode(&data);
+        assert!(decrypt_gcm(&parts.join(":"), &KEY, "gs").is_none(), "authentication must catch this");
+    }
+
+    #[test]
+    fn gcm_requires_the_matching_tag_prefix() {
+        let ct = encrypt_gcm("secret", &KEY, "gs");
+        assert!(decrypt_gcm(&ct, &KEY, "gcm").is_none(), "gs: must not be read as gcm:");
+    }
+
+    #[test]
+    fn gcm_rejects_malformed_input() {
+        for bad in ["gs:", "gs:only:two", "gs:!!!:!!!:!!!", "not-encrypted-at-all"] {
+            assert!(decrypt_gcm(bad, &KEY, "gs").is_none(), "accepted {:?}", bad);
+        }
+    }
+
+    #[test]
+    fn gcm_rejects_a_wrong_length_nonce() {
+        let ct = encrypt_gcm("secret", &KEY, "gs");
+        let parts: Vec<&str> = ct.split(':').collect();
+        let short = format!("gs:{}:{}:{}", B64.encode([0u8; 8]), parts[2], parts[3]);
+        assert!(decrypt_gcm(&short, &KEY, "gs").is_none());
+    }
+
+    #[test]
+    fn cbc_rejects_malformed_input() {
+        for bad in ["cbc:", "cbc:onlyiv", "gs:a:b:c"] {
+            assert!(decrypt_cbc(bad, &KEY).is_none(), "accepted {:?}", bad);
+        }
+    }
+
+    #[test]
+    fn safe2_round_trips_on_windows() {
+        // DPAPI is Windows-only; the stub returns None elsewhere.
+        match encrypt_safe2("cookie-value") {
+            Some(ct) => {
+                assert!(ct.starts_with("safe2:"));
+                assert_eq!(decrypt_safe2(&ct).as_deref(), Some("cookie-value"));
+            }
+            None => assert!(!cfg!(windows), "DPAPI should be available on Windows"),
+        }
+    }
+
+    #[test]
+    fn safe2_rejects_other_tags() {
+        assert!(decrypt_safe2("safe:abc").is_none());
+        assert!(decrypt_safe2("safe2:!!!not-base64").is_none());
+    }
+}

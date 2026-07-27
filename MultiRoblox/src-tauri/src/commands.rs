@@ -33,7 +33,6 @@ pub fn settings_save(state: State<AppState>, data: Map<String, Value>) -> bool {
     let mut s = load_settings();
     s.remove("webhook");
     s.remove("screenshotsEnabled");
-    let had_enc_type = data.contains_key("encryptionType");
     let multi_instance = data.get("multiInstance").cloned();
     let antiafk = data.get("antiAfk").cloned();
     let antiafk_interval_changed = data.contains_key("antiAfkInterval");
@@ -41,19 +40,14 @@ pub fn settings_save(state: State<AppState>, data: Map<String, Value>) -> bool {
         s.insert(k, v);
     }
     save_settings(&s);
-    if had_enc_type {
-        encryption::invalidate_key_cache(&state);
-    }
     if let Some(Value::Bool(on)) = multi_instance {
+        // Releases/re-acquires the mutex inside the one helper process --
+        // toggling this no longer starts or kills anything.
         let app = state.app_handle.clone();
-        if on {
-            tauri::async_runtime::spawn(async move {
-                let st = app.state::<AppState>();
-                crate::native::start_mutex_holder(&app, &st).await;
-            });
-        } else {
-            crate::native::stop_mutex_holder(&state);
-        }
+        tauri::async_runtime::spawn(async move {
+            let st = app.state::<AppState>();
+            crate::native::set_multi_instance(&app, &st, on).await;
+        });
     }
     if let Some(Value::Bool(on)) = antiafk {
         let app = state.app_handle.clone();
@@ -65,8 +59,11 @@ pub fn settings_save(state: State<AppState>, data: Map<String, Value>) -> bool {
         } else {
             crate::native::stop_antiafk(&state);
         }
-    } else if antiafk_interval_changed && state.antiafk_child.lock().unwrap().is_some() {
-        crate::native::stop_antiafk(&state);
+    } else if antiafk_interval_changed
+        && state.antiafk_on.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        // Re-arm at the new interval. start_antiafk replaces the helper's
+        // existing anti-AFK thread, so no explicit stop is needed first.
         let app = state.app_handle.clone();
         tauri::async_runtime::spawn(async move {
             let st = app.state::<AppState>();
@@ -150,13 +147,15 @@ pub fn enc_set_key(state: State<AppState>, pass: Option<String>) -> Value {
 }
 
 #[tauri::command]
-pub fn multiinstance_status(state: State<AppState>) -> Value {
+pub async fn multiinstance_status(state: State<'_, AppState>) -> Result<Value, ()> {
     let enabled = load_settings()
         .get("multiInstance")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let active = state.mutex_child.lock().unwrap().is_some();
-    serde_json::json!({ "enabled": enabled, "active": active })
+    // "active" now means the one helper is up AND actually holding the mutex,
+    // which is a stronger (and more honest) signal than "a child exists".
+    let active = crate::helper::is_holding_mutex(&state).await;
+    Ok(serde_json::json!({ "enabled": enabled, "active": active }))
 }
 
 #[tauri::command]
@@ -165,7 +164,7 @@ pub fn antiafk_status(state: State<AppState>) -> Value {
         .get("antiAfk")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let active = state.antiafk_child.lock().unwrap().is_some();
+    let active = state.antiafk_on.load(std::sync::atomic::Ordering::SeqCst);
     serde_json::json!({ "enabled": enabled, "active": active })
 }
 
@@ -427,7 +426,7 @@ pub async fn roblox_kill_all(app: AppHandle, state: State<'_, AppState>) -> Resu
         "warn",
         "kill",
         &format!(
-            "Killed all Roblox instances ({} running: {})",
+            "Killing Roblox instances launched by MultiRoblox ({} running: {})",
             count,
             if running_names.is_empty() {
                 "none".into()
@@ -538,8 +537,23 @@ pub async fn roblox_launch(
     cookie: String,
     target: Option<String>,
 ) -> Result<Value, ()> {
+    // Registered before queueing on launch_lock so a launch still waiting its
+    // turn behind another one can be cancelled as well.
+    let cancel = crate::native::register_launch(&state, &id);
     let _guard = state.launch_lock.lock().await;
-    Ok(crate::native::do_launch(&app, &state, &id, &cookie, target.as_deref().unwrap_or("")).await)
+    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+        crate::native::finish_launch(&state, &id);
+        return Ok(serde_json::json!({ "success": false, "cancelled": true, "error": "Launch cancelled" }));
+    }
+    let result =
+        crate::native::do_launch(&app, &state, &id, &cookie, target.as_deref().unwrap_or("")).await;
+    crate::native::finish_launch(&state, &id);
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn roblox_launch_cancel(state: State<AppState>, id: String) -> Value {
+    serde_json::json!({ "ok": crate::native::cancel_launch(&state, &id) })
 }
 
 // ---- browser login ----
@@ -577,6 +591,16 @@ pub async fn tracking_capture_preview(app: AppHandle, state: State<'_, AppState>
     }
 }
 
+// Lets the UI reject a bad URL as it's typed instead of silently failing on
+// the next capture. The backend check in capture_and_send is the real gate.
+#[tauri::command]
+pub fn tracking_validate_webhook(url: String) -> Value {
+    match crate::tracking::validate_webhook_url(&url) {
+        Ok(()) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    }
+}
+
 fn parse_region(region: &Value) -> Option<(f64, f64, f64, f64)> {
     Some((region.get("x")?.as_f64()?, region.get("y")?.as_f64()?, region.get("w")?.as_f64()?, region.get("h")?.as_f64()?))
 }
@@ -594,6 +618,28 @@ pub async fn tracking_capture_and_send(
     match crate::tracking::capture_and_send(&app, &state, &id, &username, &webhook_url, crops).await {
         Ok(()) => Ok(serde_json::json!({ "ok": true })),
         Err(e) => Ok(serde_json::json!({ "ok": false, "error": e })),
+    }
+}
+
+// Full reset from the lock screen -- stops the helper first and waits for it
+// to actually exit (it holds its own exe file open, which would otherwise
+// make deleting the folder fail on Windows), wipes the entire app-data
+// folder, then clears the in-memory state that would otherwise still point
+// at it. The frontend only reloads the webview afterwards, not the Rust
+// process, so the helper has to be brought back up here.
+#[tauri::command]
+pub async fn clear_app_data(app: AppHandle, state: State<'_, AppState>) -> Result<Value, ()> {
+    crate::native::stop_all_native_helpers(&state).await;
+    let dir = crate::paths::app_data_dir();
+    let result = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&dir)).await;
+    crate::native::reset_state_for_wipe(&state);
+    // Re-extracts the embedded helper into the now-empty folder and starts
+    // exactly one again, holding the mutex as before.
+    crate::native::start_mutex_holder(&app, &state).await;
+    match result {
+        Ok(Ok(())) => Ok(serde_json::json!({ "ok": true })),
+        Ok(Err(e)) => Ok(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(e) => Ok(serde_json::json!({ "ok": false, "error": e.to_string() })),
     }
 }
 

@@ -88,12 +88,6 @@ function logFind(backwards) {
 const _avatarCache = {};
 let settings = {};
 
-const ENC_OPTIONS = {
-  'aes-256-gcm': { label: 'AES-256-GCM', badge: 'Best', badgeClass: 'green' },
-  'aes-256-cbc': { label: 'AES-256-CBC', badge: 'Standard', badgeClass: 'muted' },
-};
-let selectedEnc = 'aes-256-gcm';
-
 let _encMode = null;
 function showEncModal(mode) {
   _encMode = mode;
@@ -154,6 +148,25 @@ async function skipEnc() {
   try { await api.encSetKey(''); } catch {}
   closeModal('m-enc');
   await continueInit();
+}
+
+function clearAppData() {
+  confirmAction('Delete ALL saved accounts, settings and this encryption key? This cannot be undone.', async () => {
+    const btn = document.getElementById('enc-clear-data');
+    if (btn) { btn.disabled = true; btn.textContent = 'Clearing...'; }
+    let res;
+    try { res = await api.clearAppData(); } catch (e) { res = { ok: false, error: e?.message || String(e) }; }
+    if (res && res.ok) {
+      // Full reload, not just re-running init(): the Rust side's own
+      // in-memory caches get reset by the backend, but this is the simplest
+      // way to guarantee every bit of frontend state (accounts, settings,
+      // caches) starts completely fresh against the now-empty storage too.
+      location.reload();
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = 'Clear data'; }
+      _encErr(res && res.error ? 'Could not clear data: ' + res.error : 'Could not clear data. Please try again.');
+    }
+  });
 }
 
 async function init() {
@@ -324,11 +337,16 @@ async function showAppVersion() {
 }
 
 function applySettings() {
-  if (settings.encryptionType) {
-    selectedEnc = settings.encryptionType;
-    updateCddDisplay('enc', selectedEnc);
-    document.querySelectorAll('#cdd-enc-menu .cdd-option').forEach(o =>
-      o.classList.toggle('selected', o.dataset.value === selectedEnc));
+  // Reports what the backend actually writes rather than offering a choice it
+  // doesn't honour: scrypt-derived AES-256-GCM once a key is set, otherwise
+  // Windows DPAPI tied to the logged-in account (see encryption.rs).
+  const encAlgo = document.getElementById('stat-enc-algo');
+  const encDesc = document.getElementById('stat-enc-algo-desc');
+  if (encAlgo) encAlgo.textContent = settings.keySet ? 'AES-256-GCM' : 'Windows DPAPI';
+  if (encDesc) {
+    encDesc.textContent = settings.keySet
+      ? 'Cookies are encrypted with your key (scrypt + AES-256-GCM).'
+      : 'Cookies are encrypted with Windows DPAPI, tied to your Windows account. Set a key below to use a passphrase instead.';
   }
   const keyIn = document.getElementById('custom-key');
   if (keyIn) { keyIn.value = ''; keyIn.placeholder = settings.keySet ? 'Key is set, type to update it' : 'e.g. SecureKey1234@A#'; }
@@ -501,20 +519,6 @@ function closeAllCdd() {
   document.querySelectorAll('.cdd-trigger.open').forEach(t => t.classList.remove('open'));
   document.querySelectorAll('.cdd-menu.open').forEach(m => m.classList.remove('open'));
 }
-function selectCdd(name, value) {
-  selectedEnc = value;
-  document.querySelectorAll('#cdd-' + name + '-menu .cdd-option').forEach(o =>
-    o.classList.toggle('selected', o.dataset.value === value));
-  updateCddDisplay(name, value);
-  closeAllCdd();
-}
-function updateCddDisplay(name, value) {
-  const meta = ENC_OPTIONS[value] || { label: value, badge: '', badgeClass: '' };
-  const lbl = document.getElementById('cdd-' + name + '-label');
-  const bdg = document.getElementById('cdd-' + name + '-badge');
-  if (lbl) lbl.textContent = meta.label;
-  if (bdg) { bdg.textContent = meta.badge; bdg.className = 'cdd-badge' + (meta.badgeClass ? ' ' + meta.badgeClass : ''); }
-}
 document.addEventListener('click', e => { if (!e.target.closest('.cdd')) closeAllCdd(); });
 
 // Called after any navigation/tab switch so slider fills are always correct.
@@ -606,12 +610,61 @@ function showCardMenu(id, x, y) {
     <button class="ctx-item" onclick="ctxOpenBrowser('${id}')"><span class="material-icons-round">open_in_browser</span>Open in browser</button>
   `;
   document.body.appendChild(menu);
-  // Position: keep on screen
-  const r = menu.getBoundingClientRect();
-  const vw = window.innerWidth, vh = window.innerHeight;
-  menu.style.left = Math.min(x, vw - 200) + 'px';
-  menu.style.top = Math.min(y, vh - menu.offsetHeight - 10) + 'px';
+  positionCardMenu(menu, x, y);
   setTimeout(() => document.addEventListener('click', closeCardMenu, { once: true }), 0);
+}
+
+const CTX_EDGE_GAP = 8;
+
+// Keeps the menu (and its submenu) fully on screen. Previously this assumed a
+// 200px-wide menu and only clamped the far edge, so a menu wider than that --
+// the width grows with the account name and the "Set priority" row -- still
+// ran off the right, and a clamp that went negative pushed the top of the menu
+// above the viewport where it couldn't be reached.
+function positionCardMenu(menu, x, y) {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const rect = menu.getBoundingClientRect();
+  let h = rect.height;
+
+  // Defensive: a menu taller than the window would otherwise have to be
+  // positioned partly off-screen. Scroll it instead of hiding items.
+  if (h > vh - CTX_EDGE_GAP * 2) {
+    h = vh - CTX_EDGE_GAP * 2;
+    menu.style.maxHeight = h + 'px';
+    menu.style.overflowY = 'auto';
+  }
+
+  // Clamp both ends: Math.min alone keeps it off the right/bottom edge but
+  // happily produces a negative left/top on a small window.
+  menu.style.left = Math.max(CTX_EDGE_GAP, Math.min(x, vw - rect.width - CTX_EDGE_GAP)) + 'px';
+  menu.style.top = Math.max(CTX_EDGE_GAP, Math.min(y, vh - h - CTX_EDGE_GAP)) + 'px';
+
+  positionCardSubmenu(menu, vw, vh);
+}
+
+// The priority submenu opens to the right at left:100%. Near the right edge
+// that put it entirely outside the window -- the row highlighted on hover but
+// nothing appeared, which is the "menu goes invisible" case. It's laid out
+// (opacity:0, not display:none), so it can be measured before it's shown.
+function positionCardSubmenu(menu, vw, vh) {
+  const parent = menu.querySelector('.ctx-has-sub');
+  const sub = parent && parent.querySelector('.ctx-submenu');
+  if (!sub) return;
+
+  const menuRect = menu.getBoundingClientRect();
+  const subRect = sub.getBoundingClientRect();
+
+  // Flip to the left of the menu when there isn't room on the right, unless
+  // there's even less room on that side.
+  const roomRight = vw - menuRect.right;
+  const roomLeft = menuRect.left;
+  if (roomRight < subRect.width + CTX_EDGE_GAP && roomLeft > roomRight) {
+    parent.classList.add('ctx-flip-x');
+  }
+
+  // And lift it when it would run past the bottom of the window.
+  const overflowBelow = parent.getBoundingClientRect().top - 4 + subRect.height + CTX_EDGE_GAP - vh;
+  if (overflowBelow > 0) sub.style.top = (-4 - overflowBelow) + 'px';
 }
 function closeCardMenu() { const m = document.getElementById('card-ctx-menu'); if (m) m.remove(); _ctxMenuId = null; }
 async function ctxKill(id) { closeCardMenu(); await killOne(id); }
@@ -1231,6 +1284,12 @@ function confirmAction(message, onConfirm) {
   const newBtn = btn.cloneNode(true); // clone to remove old listeners
   btn.parentNode.replaceChild(newBtn, btn);
   newBtn.addEventListener('click', () => { closeModal('m-confirm-delete'); onConfirm(); });
+  // All overlays share the same z-index, so equal-z stacking falls back to
+  // DOM order -- moving this to the end of <body> guarantees it renders on
+  // top even when triggered from inside another already-open modal (e.g.
+  // "Clear data" on the encryption lock screen), instead of silently
+  // rendering underneath it.
+  document.body.appendChild(document.getElementById('m-confirm-delete'));
   openModal('m-confirm-delete');
 }
 
@@ -1250,12 +1309,25 @@ async function removeAcc(id) {
 }
 async function clearAll() {
   if (!accounts.length) return;
-  confirmAction('Remove all ' + accounts.length + ' accounts? This cannot be undone.', async () => {
+  const genCount = _genHistory.length;
+  const msg = 'Remove all ' + accounts.length + ' account' + (accounts.length === 1 ? '' : 's')
+    + (genCount ? ' and ' + genCount + ' generated account' + (genCount === 1 ? '' : 's') + ' from the generator history' : '')
+    + '? This cannot be undone.';
+  confirmAction(msg, async () => {
     for (const a of accounts) { await api.removeAccount(a.id); forgetTrackingAccount(a.id); }
     accounts = []; render(); document.getElementById('stat-count').textContent = '0';
     packages.forEach(p => { p.accountIds = []; });
     api.savePackages(packages);
     renderPackages();
+    // The generator history holds usernames, passwords and cookies of its own,
+    // so "remove all saved accounts and sign-in data" has to take it too --
+    // otherwise the most sensitive records survive the wipe.
+    if (genCount) {
+      _genHistory = [];
+      _lastGenData = null;
+      genRenderHistory();
+      try { await api.clearGenHistory(); } catch {}
+    }
     toast('All accounts cleared', 'err');
   });
 }
@@ -1278,18 +1350,49 @@ function openLaunch(id) {
   }
 
   setStatus('launch-status', 'hidden', '');
+  _launchingId = null;
   const btn = document.getElementById('btn-launch');
   btn.disabled = false; btn.innerHTML = 'Start';
   openModal('m-launch');
 }
+// The Cancel button doubles as "abandon the launch in progress": a launch can
+// take ~30s (stagger, ticket retries, spawn retries), so closing the modal
+// alone would leave it running with no way to stop it.
+let _launchingId = null;
+async function cancelLaunchOrClose() {
+  if (_launchingId) {
+    const id = _launchingId;
+    try { await api.cancelLaunch(id); } catch {}
+    logEntry('warn', 'launch', 'Launch cancelled', { accountId: id });
+  }
+  closeModal('m-launch');
+}
+
 async function doLaunch() {
   if (!launchAcc) return;
   const btn = document.getElementById('btn-launch');
   if (btn.disabled) return;
+  _launchingId = launchAcc.id;
   btn.disabled = true; btn.innerHTML = '<div class="spin"></div>Launching';
   setStatus('launch-status', 'load', '<div class="spin"></div>Getting auth ticket\u2026');
   logEntry('info', 'launch', `Launching Roblox for ${launchAcc.username || launchAcc.id}...`, { accountId: launchAcc.id, username: launchAcc.username, userId: launchAcc.userId, target: launchAcc.gameTarget || 'Roblox home' });
-  const res = await api.launchRoblox(launchAcc.id, launchAcc.cookie, launchAcc.gameTarget || null);
+  let res;
+  try {
+    res = await api.launchRoblox(launchAcc.id, launchAcc.cookie, launchAcc.gameTarget || null);
+  } catch (e) {
+    // Should never reject in practice (the backend command always resolves
+    // with {success:false,...} on failure), but if it ever does, the button
+    // must not stay stuck on "Launching..." forever with no way out.
+    res = { success: false, error: e?.message || String(e) };
+  }
+  _launchingId = null;
+  if (res.cancelled) {
+    // The user already asked for this and the modal is closing - don't shout
+    // an error at them on the way out.
+    btn.disabled = false; btn.innerHTML = 'Start';
+    closeModal('m-launch');
+    return;
+  }
   if (!res.success) {
     logEntry('err', 'launch', `Launch failed for ${launchAcc.username || launchAcc.id}: ${res.error}`, { accountId: launchAcc.id });
     setStatus('launch-status', 'err', '<span class="material-icons-round">error_outline</span>' + esc(res.error));
@@ -1544,12 +1647,11 @@ async function saveKeySettings() {
   btn.disabled = true; btn.textContent = 'Saving';
   _saveKeyTimer = setTimeout(async () => {
     try {
-      await api.saveSettings({ encryptionType: selectedEnc });
       // enc:setKey changes the key and re-encrypts accounts in one step.
       const r = await api.encSetKey(keyVal);
       if (!r || !r.ok) throw new Error(r && r.error ? r.error : 'could not update key');
       if (!keyVal.trim()) throw new Error('Encryption key cannot be empty.');
-      settings.encryptionType = selectedEnc; settings.keySet = true;
+      settings.keySet = true;
       document.getElementById('custom-key').value = '';
       // Reload accounts so the renderer holds cookies under the new key.
       try { accounts = await api.loadAccounts(); flagInvalidCookies(accounts); render(); } catch {}
@@ -1575,9 +1677,24 @@ function toast(msg, type) {
   toastTimer = setTimeout(() => el.classList.remove('show'), 2700);
 }
 
+// Defaults multi-instance on for a fresh install, but leaves an explicit
+// `false` alone -- this used to force it back on every time the Settings page
+// was opened, so the setting could never stay off.
 async function refreshMultiStatus() {
-  const s = await api.multiInstanceStatus();
-  if (!s.enabled) { await api.saveSettings({ multiInstance: true }); settings.multiInstance = true; }
+  let s = await api.multiInstanceStatus();
+  if (!s.enabled && settings.multiInstance === undefined) {
+    await api.saveSettings({ multiInstance: true });
+    settings.multiInstance = true;
+    s = { enabled: true, active: s.active };
+  }
+  // The badge used to be hardcoded "Always On"; now that an explicit off is
+  // honoured it has to say what's actually true. "Starting" covers the brief
+  // window before the native helper has the mutex.
+  const badge = document.getElementById('stat-multi');
+  if (badge) {
+    badge.textContent = s.enabled ? (s.active ? 'Always On' : 'Starting') : 'Off';
+    badge.className = 'badge' + (s.enabled && s.active ? ' g' : ' muted');
+  }
 }
 
 document.querySelectorAll('.overlay').forEach(o => {
@@ -1876,8 +1993,12 @@ async function mixInit() {
 
 // FPS
 function mixFpsInput(v) {
-  document.getElementById('mix-fps-val').textContent = v;
-  updateSliderFill(document.getElementById('mix-fps'));
+  v = parseInt(v, 10);
+  const snapped = v >= 9999 ? 9999 : Math.round(v / 10) * 10;
+  const sl = document.getElementById('mix-fps');
+  if (sl.value != snapped) sl.value = snapped;
+  document.getElementById('mix-fps-val').textContent = snapped;
+  updateSliderFill(sl);
 }
 async function mixFpsUnlToggle() {
   const unl = document.getElementById('mix-fps-unl').checked;
@@ -1970,16 +2091,9 @@ async function mixRefreshRunning() {
     _mixRunning = await api.getRunningCount();
   } catch { _mixRunning = 0; }
   setRunningBadges(_mixRunning);
-
-  // Seed _launchedIds from recently-used accounts if the app just restarted.
-  if (_mixRunning > 0 && _launchedIds.size === 0) {
-    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
-    const recentAccounts = accounts.filter(a => a.lastUsed && new Date(a.lastUsed).getTime() > twoHoursAgo);
-    const seed = recentAccounts.slice(0, _mixRunning);
-    for (const a of seed) {
-      markLaunched(a.id);
-    }
-  }
+  // No guessing which accounts are live from lastUsed any more: the count now
+  // only includes instances the backend actually tracks, and pollWatchedIds()
+  // syncs the real set every 3s, so a guess could only mislabel cards.
 }
 
 // Merge a single key into the on-disk Fast Flags without disturbing others.
@@ -2128,8 +2242,14 @@ async function mixKillAll() {
   refreshPkgAvatarStatus();
   await mixRefreshRunning();
   btns.forEach(b => { b.disabled = false; b.innerHTML = b.dataset.orig; });
-  if (res && res.ok) toast('All Roblox instances closed', 'ok');
-  else toast('Kill failed' + (res && res.error ? ': ' + res.error : ''), 'err');
+  if (res && res.ok) {
+    const n = res.killed || 0;
+    // Only instances this app launched are killed, so say how many rather
+    // than claiming everything Roblox-shaped on the machine is gone.
+    let msg = n ? `Closed ${n} instance${n === 1 ? '' : 's'}` : 'No instances launched by MultiRoblox';
+    if (res.untracked) msg += ` (${res.untracked} couldn't be identified)`;
+    toast(msg, 'ok');
+  } else toast('Kill failed' + (res && res.error ? ': ' + res.error : ''), 'err');
 }
 
 // Re-pushes current graphics/fps/volume values and confirms; doesn't touch
@@ -2463,12 +2583,21 @@ function saveTrackingInterval() {
   toast('Tracking interval: ' + formatTrackingInterval(sec), 'ok');
 }
 
-function saveTrackingWebhookUrl() {
+async function saveTrackingWebhookUrl() {
   const input = document.getElementById('tracking-webhook-url');
   if (!input) return;
-  settings.trackingWebhookUrl = input.value.trim();
-  api.saveSettings({ trackingWebhookUrl: settings.trackingWebhookUrl });
-  toast('Webhook saved', 'ok');
+  const url = input.value.trim();
+  // Clearing the field just turns tracking off; only a non-empty value has to
+  // be a real Discord webhook (the backend enforces this too).
+  if (url) {
+    let check;
+    try { check = await api.trackingValidateWebhook(url); } catch { check = null; }
+    if (check && !check.ok) { toast(check.error || 'That webhook URL is not valid', 'err'); return; }
+  }
+  settings.trackingWebhookUrl = url;
+  api.saveSettings({ trackingWebhookUrl: url });
+  startTrackingLoop();
+  toast(url ? 'Webhook saved' : 'Webhook cleared', 'ok');
 }
 
 function toggleTimedTrackingAccount(id) {
@@ -2980,7 +3109,7 @@ function saveRegionPicker() {
     const customHtml = _customSounds.map(s => `
       <div class="sound-card ${_currentProfile === '__custom__' + s.id ? 'sel' : ''}" onclick="soundSelectCustom('${s.id}')">
         <div class="sound-card-icon"><span class="material-icons-round">audiotrack</span></div>
-        <div class="sound-card-label" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px" title="${s.name}">${s.name}</div>
+        <div class="sound-card-label" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px" title="${esc(s.name)}">${esc(s.name)}</div>
         <div class="sound-card-desc">Custom sound</div>
         <div style="display:flex;gap:4px;margin-top:auto">
           <button class="sound-card-preview" onclick="event.stopPropagation();soundPreviewCustom('${s.id}')" title="Preview">

@@ -8,6 +8,32 @@
 // time, and spawned directly -- no PowerShell, no per-call JIT/compile.
 //
 // Subcommands:
+//   RobloxNative.exe daemon         -> THE mode the app actually uses. One
+//                                      resident process for the entire
+//                                      MultiRoblox session: it holds the
+//                                      singleton mutexes, runs anti-AFK and
+//                                      the PID watcher on background threads,
+//                                      and serves closehandles/volume/pids/
+//                                      capture as requests over stdin/stdout.
+//                                      Exits when stdin hits EOF -- i.e. the
+//                                      moment MultiRoblox itself is gone --
+//                                      so the helper can never outlive its
+//                                      parent or pile up one-per-launch.
+//
+//                                      Line protocol (UTF-8, '|' separated):
+//                                        in   <id>|<cmd>[|arg...]
+//                                        out  R|<id>|OK|<payload>
+//                                             R|<id>|ERR|<message>
+//                                             E|<event>|<payload>
+//                                      Requests are answered by id, so a slow
+//                                      capture never head-of-line blocks a
+//                                      pids poll. Events (READY, PIDS, AFK)
+//                                      are pushed unsolicited.
+//
+// The single-shot subcommands below predate daemon mode and are kept for
+// manual debugging (and so build.bat's smoke test still works) -- the app
+// itself no longer spawns any of them.
+//
 //   RobloxNative.exe mutex          -> hold ROBLOX_singletonMutex for the
 //                                      session; prints MUTEX_HELD then blocks.
 //   RobloxNative.exe closehandles   -> close ROBLOX_singletonEvent handles on
@@ -60,8 +86,9 @@ internal static class RobloxNative
                 case "pids":         return RunPids();
                 case "watch":        return RunWatch(args);
                 case "capture":      return RunCapture(args);
+                case "daemon":       return Daemon.Run();
                 default:
-                    Console.Error.WriteLine("Unknown command. Use: mutex | closehandles | volume <0-100> | antiafk <seconds> | pids | watch [ms] | capture <pid> [xFrac yFrac wFrac hFrac]");
+                    Console.Error.WriteLine("Unknown command. Use: daemon | mutex | closehandles | volume <0-100> | antiafk <seconds> | pids | watch [ms] | capture <pid> [xFrac yFrac wFrac hFrac]");
                     return 2;
             }
         }
@@ -173,7 +200,10 @@ internal static class RobloxNative
 
         Console.Out.WriteLine("ANTIAFK_ON:" + deadlineSec);
         Console.Out.Flush();
-        AntiAfk.RunLoop(deadlineSec, vk);
+        AntiAfk.RunLoop(deadlineSec, vk, pid => {
+            Console.Out.WriteLine("ANTIAFK_TICK:" + pid);
+            Console.Out.Flush();
+        }, null);
         return 0;
     }
 
@@ -241,12 +271,30 @@ internal static class RobloxNative
             }
         }
 
+        try
+        {
+            Console.Out.WriteLine("CAPTURED_B64:" + CaptureBase64(pid, hasCrop, xFrac, yFrac, wFrac, hFrac));
+            Console.Out.Flush();
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("Capture: " + ex.Message);
+            return 1;
+        }
+    }
+
+    // Shared by the standalone subcommand and daemon mode. Throws with a
+    // user-facing message on failure so daemon mode can forward it verbatim
+    // as an ERR payload instead of inventing its own error text.
+    public static string CaptureBase64(int pid, bool hasCrop, double xFrac, double yFrac, double wFrac, double hFrac)
+    {
         Process process;
         try { process = Process.GetProcessById(pid); }
-        catch { Console.Error.WriteLine("Process not found"); return 1; }
+        catch { throw new Exception("Process not found"); }
 
         var hwnd = process.MainWindowHandle;
-        if (hwnd == IntPtr.Zero) { Console.Error.WriteLine("Roblox window not found"); return 1; }
+        if (hwnd == IntPtr.Zero) throw new Exception("Roblox window not found");
 
         bool wasMinimised = IsIconic(hwnd);
         try
@@ -256,9 +304,9 @@ internal static class RobloxNative
             Thread.Sleep(150);
 
             RECT rect;
-            if (!GetWindowRect(hwnd, out rect)) { Console.Error.WriteLine("Could not read Roblox window bounds"); return 1; }
+            if (!GetWindowRect(hwnd, out rect)) throw new Exception("Could not read Roblox window bounds");
             int width = rect.Right - rect.Left, height = rect.Bottom - rect.Top;
-            if (width <= 0 || height <= 0) { Console.Error.WriteLine("Roblox window has invalid bounds"); return 1; }
+            if (width <= 0 || height <= 0) throw new Exception("Roblox window has invalid bounds");
 
             using (var full = new Bitmap(width, height))
             {
@@ -279,25 +327,33 @@ internal static class RobloxNative
                     output = cropped;
                 }
 
-                using (var ms = new System.IO.MemoryStream())
+                try
                 {
-                    output.Save(ms, ImageFormat.Png);
-                    Console.Out.WriteLine("CAPTURED_B64:" + Convert.ToBase64String(ms.ToArray()));
-                    Console.Out.Flush();
+                    using (var ms = new System.IO.MemoryStream())
+                    {
+                        output.Save(ms, ImageFormat.Png);
+                        return Convert.ToBase64String(ms.ToArray());
+                    }
                 }
-                if (cropped != null) cropped.Dispose();
+                finally { if (cropped != null) cropped.Dispose(); }
             }
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine("Capture: " + ex.Message);
-            return 1;
         }
         finally
         {
             if (wasMinimised) ShowWindowCapture(hwnd, SW_MINIMIZE_CAPTURE);
         }
+    }
+
+    public static int[] RobloxPids()
+    {
+        try
+        {
+            var procs = Process.GetProcessesByName("RobloxPlayerBeta");
+            var ids = new int[procs.Length];
+            for (int i = 0; i < procs.Length; i++) ids[i] = procs[i].Id;
+            return ids;
+        }
+        catch { return new int[0]; }
     }
 
     static int Clamp(int v, int min, int max) { return v < min ? min : (v > max ? max : v); }
@@ -335,12 +391,16 @@ internal static class HandleCloser
         public int Reserved;
     }
 
-    public static void CloseRobloxSingletonHandles()
+    // Returns how many singleton-event handles were closed. Deliberately
+    // writes nothing to stdout -- daemon mode multiplexes a line protocol
+    // over that stream, and a stray "CLOSED:<pid>" would desync it.
+    public static int CloseRobloxSingletonHandles()
     {
+        int closed = 0;
         var robloxPids = new System.Collections.Generic.HashSet<int>();
         foreach (var p in Process.GetProcessesByName("RobloxPlayerBeta"))
             robloxPids.Add(p.Id);
-        if (robloxPids.Count == 0) return;
+        if (robloxPids.Count == 0) return 0;
 
         int size = 1 << 20;
         IntPtr buf = IntPtr.Zero;
@@ -354,7 +414,7 @@ internal static class HandleCloser
                 if (status == 0) break;
                 Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
                 if (status == unchecked((int)0xC0000004)) { size *= 2; continue; } // STATUS_INFO_LENGTH_MISMATCH
-                return;
+                return closed;
             }
 
             long count = Marshal.ReadInt64(buf);
@@ -398,7 +458,7 @@ internal static class HandleCloser
                                 {
                                     IntPtr dummy;
                                     DuplicateHandle(srcProc, entry.HandleValue, IntPtr.Zero, out dummy, 0, false, DUPLICATE_CLOSE_SOURCE);
-                                    Console.Out.WriteLine("CLOSED:" + pid);
+                                    closed++;
                                 }
                             }
                         }
@@ -413,6 +473,7 @@ internal static class HandleCloser
         {
             if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf);
         }
+        return closed;
     }
 }
 
@@ -626,13 +687,57 @@ internal static class AntiAfk
     // when it launched or was last tapped. The instant an instance reaches the
     // deadline it is tapped, including the one you're playing, then focus is
     // handed straight back to whatever window you were on.
-    public static void RunLoop(int deadlineSec, int vk)
+    // onTap reports each tapped PID (daemon mode turns that into an event
+    // line; standalone mode prints ANTIAFK_TICK). stop lets daemon mode
+    // reconfigure or switch anti-AFK off without killing the process --
+    // there is only ever one helper process, so the loop has to be
+    // interruptible rather than terminated.
+    public static void RunLoop(int deadlineSec, int vk, Action<uint> onTap, WaitHandle stop)
     {
         // Disable the foreground lock timeout so SetForegroundWindow reliably
         // brings each Roblox window to the front, even across many instances.
+        // This is a SYSTEM-WIDE setting that applies to every app until the
+        // next reboot, so read the old value first and put it back when
+        // anti-AFK stops (see the finally below) instead of leaving the
+        // machine altered after we're done with it.
+        const uint SPI_GETFOREGROUNDLOCKTIMEOUT = 0x2000;
         const uint SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001;
-        try { SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, IntPtr.Zero, 0); } catch { }
+        uint previousTimeout = 0;
+        bool restoreTimeout = false;
+        try
+        {
+            IntPtr buf = Marshal.AllocHGlobal(sizeof(int));
+            try
+            {
+                if (SystemParametersInfo(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, buf, 0))
+                {
+                    previousTimeout = (uint)Marshal.ReadInt32(buf);
+                    restoreTimeout = true;
+                }
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+            // For this action the new value travels *in* pvParam, it is not a
+            // pointer to it -- zero here means "no delay".
+            SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, IntPtr.Zero, 0);
+        }
+        catch { }
 
+        try
+        {
+            RunLoopCore(deadlineSec, vk, onTap, stop);
+        }
+        finally
+        {
+            if (restoreTimeout)
+            {
+                try { SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, new IntPtr((int)previousTimeout), 0); }
+                catch { }
+            }
+        }
+    }
+
+    static void RunLoopCore(int deadlineSec, int vk, Action<uint> onTap, WaitHandle stop)
+    {
         byte bVk = (byte)vk;
         byte bScan = (byte)MapVirtualKey((uint)vk, 0);
         // pid -> UTC time its idle timer last reset (launch or our tap)
@@ -640,7 +745,9 @@ internal static class AntiAfk
 
         while (true)
         {
-            Thread.Sleep(15 * 1000); // fire within ~15s of the deadline
+            // fire within ~15s of the deadline, but wake immediately on stop
+            if (stop != null && stop.WaitOne(15 * 1000)) return;
+            if (stop == null) Thread.Sleep(15 * 1000);
             DateTime now = DateTime.UtcNow;
 
             // Capture the window you're on BEFORE touching anything, so we can
@@ -669,11 +776,7 @@ internal static class AntiAfk
 
             foreach (var pid in due)
             {
-                if (TapWindow(windows[pid], bVk, bScan))
-                {
-                    Console.Out.WriteLine("ANTIAFK_TICK:" + pid);
-                    Console.Out.Flush();
-                }
+                if (TapWindow(windows[pid], bVk, bScan) && onTap != null) onTap(pid);
                 lastReset[pid] = DateTime.UtcNow;
             }
 
@@ -695,5 +798,387 @@ internal static class AntiAfk
             SetForegroundWindow(hWnd); // second pass; focus has settled by now
         }
         catch { }
+    }
+}
+
+// ── Singleton mutex ownership ───────────────────────────────────────────────
+// A Windows mutex is owned by the THREAD that acquired it -- if that thread
+// exits, the mutex is abandoned and Roblox's singleton check starts passing
+// again. So exactly one dedicated thread acquires both names and then parks
+// forever, servicing hold/release/re-hold requests without ever unwinding.
+// (The old design got this for free by dedicating a whole PROCESS to it; the
+// point of daemon mode is that we no longer spend a process per concern.)
+internal static class MutexHolder
+{
+    static Mutex _singleton, _event;
+    static readonly AutoResetEvent _wake = new AutoResetEvent(false);
+    static readonly ManualResetEvent _ready = new ManualResetEvent(false);
+    static readonly ManualResetEvent _done = new ManualResetEvent(false);
+    static readonly object _applyLock = new object();
+    static volatile bool _wantHeld = true;
+    static volatile bool _reholdRequested;
+    static volatile bool _held;
+
+    public static bool Held { get { return _held; } }
+
+    public static void Start()
+    {
+        var t = new Thread(Loop);
+        t.IsBackground = true;
+        t.Name = "MutexHolder";
+        t.Start();
+        // Matches the old "MUTEX_HELD within 8s" contract the launch path
+        // relied on, so a launch can never race an unheld mutex.
+        _ready.WaitOne(8000);
+    }
+
+    // Serialized so two racing settings toggles can't interleave a release
+    // with a re-acquire. Blocks until the holder thread has actually applied
+    // the change -- callers (kill-all, multi-instance toggle) need the new
+    // state to be real before they return, not merely queued.
+    public static bool Apply(bool hold, bool rehold, int timeoutMs)
+    {
+        lock (_applyLock)
+        {
+            _wantHeld = hold;
+            _reholdRequested = rehold;
+            _done.Reset();
+            _wake.Set();
+            _done.WaitOne(timeoutMs);
+            return _held;
+        }
+    }
+
+    static void Loop()
+    {
+        Acquire();
+        _ready.Set();
+        SlowPart();
+        _done.Set();
+        while (true)
+        {
+            _wake.WaitOne();
+            bool rehold = _reholdRequested;
+            _reholdRequested = false;
+            try
+            {
+                if (!_wantHeld) Release();
+                else if (!_held || rehold)
+                {
+                    Release(); // drop any stale/abandoned ownership first
+                    Acquire();
+                    SlowPart();
+                }
+            }
+            catch (Exception ex) { Daemon.Warn("MutexHolder: " + ex.Message); }
+            _done.Set();
+        }
+    }
+
+    static void Acquire()
+    {
+        try
+        {
+            bool created;
+            _singleton = new Mutex(true, "ROBLOX_singletonMutex", out created);
+            bool owned = created;
+            if (!created)
+            {
+                try { owned = _singleton.WaitOne(0); }
+                catch (AbandonedMutexException) { owned = true; }
+                catch { owned = false; }
+            }
+            _held = owned;
+        }
+        catch (Exception ex) { _held = false; Daemon.Warn("HoldMutex: " + ex.Message); }
+    }
+
+    // The slow half: close any singleton-event handles Roblox already opened,
+    // then hold that name too. Runs after readiness is signalled so a cold
+    // start never blocks the first launch on a full handle-table scan.
+    static void SlowPart()
+    {
+        try { HandleCloser.CloseRobloxSingletonHandles(); }
+        catch (Exception ex) { Daemon.Warn("CloseHandles(hold): " + ex.Message); }
+        try
+        {
+            bool created;
+            _event = new Mutex(true, "ROBLOX_singletonEvent", out created);
+            if (!created) { try { _event.WaitOne(0); } catch (AbandonedMutexException) { } catch { } }
+        }
+        catch (Exception ex) { Daemon.Warn("HoldEventMutex: " + ex.Message); }
+    }
+
+    static void Release()
+    {
+        if (_event != null)
+        {
+            try { _event.ReleaseMutex(); } catch { }
+            try { _event.Dispose(); } catch { }
+            _event = null;
+        }
+        if (_singleton != null)
+        {
+            try { _singleton.ReleaseMutex(); } catch { }
+            try { _singleton.Dispose(); } catch { }
+            _singleton = null;
+        }
+        _held = false;
+    }
+}
+
+// ── Daemon: the one and only helper process ─────────────────────────────────
+internal static class Daemon
+{
+    static readonly object _outLock = new object();
+    static System.IO.StreamWriter _out;
+
+    static Thread _watchThread; static ManualResetEvent _watchStop;
+    static Thread _afkThread;   static ManualResetEvent _afkStop;
+    static readonly object _threadLock = new object();
+
+    // Named per user session (no "Global\") -- MultiRoblox is a per-user app.
+    // Bump the suffix if the line protocol ever changes incompatibly.
+    const string SINGLETON_NAME = "MultiRoblox_NativeHelper_v1";
+    static Mutex _singleInstance;
+
+    public static int Run()
+    {
+        _out = new System.IO.StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false), 1 << 16);
+        _out.AutoFlush = false;
+
+        // Belt to the caller's braces: the app already sweeps strays and
+        // serializes its own spawns, but this makes "exactly one helper" an
+        // OS-enforced invariant instead of a promise the caller has to keep.
+        // Checked before touching Roblox's mutexes so a stray second copy
+        // can't disturb the incumbent on its way out.
+        bool createdNew;
+        _singleInstance = new Mutex(true, SINGLETON_NAME, out createdNew);
+        if (!createdNew)
+        {
+            Emit("DUPLICATE", "another helper is already running");
+            return 3;
+        }
+
+        MutexHolder.Start();
+        Emit("READY", MutexHolder.Held ? "1" : "0");
+
+        var stdin = new System.IO.StreamReader(Console.OpenStandardInput(), System.Text.Encoding.UTF8);
+        string line;
+        while ((line = stdin.ReadLine()) != null)
+        {
+            string work = line.Trim();
+            if (work.Length == 0) continue;
+            if (work == "0|shutdown") break; // fast path, no reply expected
+            // Off the read loop: a capture takes ~200ms and closehandles can
+            // take seconds, and neither may stall a pids poll behind it.
+            // Responses carry their request id, so out-of-order is fine.
+            ThreadPool.QueueUserWorkItem(delegate { Handle(work); });
+        }
+
+        // stdin EOF means MultiRoblox is gone -- exited cleanly, crashed, or
+        // was force-killed. Either way this process must not survive it, so
+        // there is never an orphaned helper holding Roblox's mutex.
+        StopWatch();
+        StopAfk();
+        return 0;
+    }
+
+    static void Handle(string line)
+    {
+        string[] p = line.Split('|');
+        string id = p.Length > 0 ? p[0] : "0";
+        string cmd = p.Length > 1 ? p[1].ToLowerInvariant() : "";
+        try
+        {
+            switch (cmd)
+            {
+                case "ping":
+                    Reply(id, "pong");
+                    break;
+
+                case "pids":
+                    Reply(id, PidList());
+                    break;
+
+                case "closehandles":
+                    Reply(id, HandleCloser.CloseRobloxSingletonHandles().ToString());
+                    break;
+
+                case "mutex":
+                {
+                    string mode = p.Length > 2 ? p[2].ToLowerInvariant() : "on";
+                    bool held;
+                    if (mode == "off") held = MutexHolder.Apply(false, false, 15000);
+                    else if (mode == "rehold") held = MutexHolder.Apply(true, true, 15000);
+                    else held = MutexHolder.Apply(true, false, 15000);
+                    Reply(id, held ? "1" : "0");
+                    break;
+                }
+
+                case "volume":
+                {
+                    int pct = 0;
+                    if (p.Length > 2) int.TryParse(p[2], out pct);
+                    if (pct < 0) pct = 0;
+                    if (pct > 100) pct = 100;
+                    int[] pids = RobloxNative.RobloxPids();
+                    int n = pids.Length == 0 ? 0 : AudioControl.Apply(pct / 100.0f, pids);
+                    Reply(id, n.ToString());
+                    break;
+                }
+
+                case "watch":
+                {
+                    int ms = 0;
+                    if (p.Length > 2) int.TryParse(p[2], out ms);
+                    if (ms <= 0) StopWatch();
+                    else StartWatch(ms < 250 ? 250 : ms);
+                    Reply(id, "ok");
+                    break;
+                }
+
+                case "antiafk":
+                {
+                    int sec = 0;
+                    if (p.Length > 2) int.TryParse(p[2], out sec);
+                    int vk = 0x10;
+                    if (p.Length > 3) { int v; if (int.TryParse(p[3], out v) && v > 0 && v < 256) vk = v; }
+                    if (sec <= 0) { StopAfk(); Reply(id, "off"); break; }
+                    if (sec < 60) sec = 60;
+                    if (sec > 1140) sec = 1140; // stay under Roblox's ~20-min kick
+                    StartAfk(sec, vk);
+                    Reply(id, sec.ToString());
+                    break;
+                }
+
+                case "capture":
+                {
+                    int pid;
+                    if (p.Length < 3 || !int.TryParse(p[2], out pid) || pid <= 0) { Fail(id, "Invalid PID"); break; }
+                    double x = 0, y = 0, w = 1, h = 1;
+                    bool crop = false;
+                    if (p.Length >= 7 && TryParseD(p[3], out x) && TryParseD(p[4], out y)
+                                      && TryParseD(p[5], out w) && TryParseD(p[6], out h))
+                        crop = true;
+                    Reply(id, RobloxNative.CaptureBase64(pid, crop, x, y, w, h));
+                    break;
+                }
+
+                case "shutdown":
+                    Reply(id, "ok");
+                    // Stop the workers first: Environment.Exit kills background
+                    // threads outright, so anti-AFK's finally -- which restores
+                    // the system foreground-lock timeout -- would never run.
+                    StopWatch();
+                    StopAfk();
+                    Environment.Exit(0);
+                    break;
+
+                default:
+                    Fail(id, "unknown command: " + cmd);
+                    break;
+            }
+        }
+        catch (Exception ex) { Fail(id, ex.Message); }
+    }
+
+    // Always invariant: the Rust side formats fractions with '.', which
+    // current-culture parsing would reject outright on a comma-decimal
+    // locale -- silently turning every cropped capture into a full-window one.
+    static bool TryParseD(string s, out double v)
+    {
+        return double.TryParse(s, System.Globalization.NumberStyles.Float,
+                               System.Globalization.CultureInfo.InvariantCulture, out v);
+    }
+
+    static string PidList()
+    {
+        int[] ids = RobloxNative.RobloxPids();
+        var parts = new string[ids.Length];
+        for (int i = 0; i < ids.Length; i++) parts[i] = ids[i].ToString();
+        return string.Join(",", parts);
+    }
+
+    static void StartWatch(int intervalMs)
+    {
+        lock (_threadLock)
+        {
+            StopWatchLocked();
+            var stop = new ManualResetEvent(false);
+            var t = new Thread(delegate()
+            {
+                while (true)
+                {
+                    Emit("PIDS", PidList());
+                    if (stop.WaitOne(intervalMs)) return;
+                }
+            });
+            t.IsBackground = true;
+            t.Name = "PidWatch";
+            t.Start();
+            _watchThread = t;
+            _watchStop = stop;
+        }
+    }
+
+    public static void StopWatch() { lock (_threadLock) { StopWatchLocked(); } }
+
+    static void StopWatchLocked()
+    {
+        if (_watchStop != null) { try { _watchStop.Set(); } catch { } }
+        if (_watchThread != null) { try { _watchThread.Join(2000); } catch { } }
+        _watchThread = null;
+        _watchStop = null;
+    }
+
+    static void StartAfk(int deadlineSec, int vk)
+    {
+        lock (_threadLock)
+        {
+            StopAfkLocked();
+            var stop = new ManualResetEvent(false);
+            var t = new Thread(delegate()
+            {
+                AntiAfk.RunLoop(deadlineSec, vk, delegate(uint pid) { Emit("AFK", pid.ToString()); }, stop);
+            });
+            t.IsBackground = true;
+            t.Name = "AntiAfk";
+            t.Start();
+            _afkThread = t;
+            _afkStop = stop;
+        }
+    }
+
+    public static void StopAfk() { lock (_threadLock) { StopAfkLocked(); } }
+
+    static void StopAfkLocked()
+    {
+        if (_afkStop != null) { try { _afkStop.Set(); } catch { } }
+        // Bounded: a tap in progress holds the loop for a few hundred ms.
+        if (_afkThread != null) { try { _afkThread.Join(3000); } catch { } }
+        _afkThread = null;
+        _afkStop = null;
+    }
+
+    static void Reply(string id, string payload) { WriteLine("R|" + id + "|OK|" + payload); }
+    static void Fail(string id, string message)  { WriteLine("R|" + id + "|ERR|" + San(message)); }
+    static void Emit(string name, string payload) { WriteLine("E|" + name + "|" + payload); }
+    public static void Warn(string message) { try { Console.Error.WriteLine(message); } catch { } }
+
+    // Error text is the only field that can contain a separator or newline;
+    // neutralise both so one bad message can't desync the whole stream.
+    static string San(string s)
+    {
+        if (s == null) return "";
+        return s.Replace("\r", " ").Replace("\n", " ").Replace("|", "/");
+    }
+
+    static void WriteLine(string s)
+    {
+        lock (_outLock)
+        {
+            try { _out.Write(s); _out.Write('\n'); _out.Flush(); } catch { }
+        }
     }
 }

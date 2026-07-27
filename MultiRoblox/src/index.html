@@ -14,7 +14,7 @@
   <div class="tb-brand">
     <div class="tb-name">MultiRoblox</div>
     <span class="tb-version" id="tb-roblox-ver">-</span>
-    <span class="tb-running" id="tb-running" title="Roblox instances currently running" style="display:none"></span>
+    <span class="tb-running" id="tb-running" title="Roblox instances launched by MultiRoblox and still running" style="display:none"></span>
   </div>
   <div class="tb-drag"></div>
   <button class="tb-btn" id="discord-btn" onclick="openDiscord()" title="Join our Discord" aria-label="Join our Discord" style="-webkit-app-region:no-drag">
@@ -60,7 +60,7 @@
       <span class="material-icons-round">favorite</span>Credits
     </button>
     <div class="nav-spacer"></div>
-    <button class="btn btn-danger kill-roblox-btn" id="nav-kill" onclick="mixKillAll()">
+    <button class="btn btn-danger kill-roblox-btn" id="nav-kill" onclick="mixKillAll()" title="Close every Roblox instance launched by MultiRoblox. Instances you started yourself are left alone.">
       <span class="material-icons-round" style="font-size:15px">power_settings_new</span>Kill Roblox
     </button>
     <div class="sb-afk" title="Keep instances past the 20-minute idle kick">
@@ -241,7 +241,7 @@
             <button class="btn btn-primary" style="flex:1;justify-content:center;min-width:150px" onclick="mixApply()" id="mix-relaunch-btn">
               <span class="material-icons-round" style="font-size:15px">check</span>Apply
             </button>
-            <button class="btn btn-danger kill-roblox-btn" style="flex:1;justify-content:center;min-width:150px" onclick="mixKillAll()" id="mix-kill-btn">
+            <button class="btn btn-danger kill-roblox-btn" style="flex:1;justify-content:center;min-width:150px" onclick="mixKillAll()" id="mix-kill-btn" title="Close every Roblox instance launched by MultiRoblox. Instances you started yourself are left alone.">
               <span class="material-icons-round" style="font-size:15px">power_settings_new</span>Kill all Roblox
             </button>
           </div>
@@ -355,7 +355,7 @@
           <!-- Multi-instance -->
           <div class="sc">
             <div class="sc-head">Multi-Instance</div>
-            <div class="sr"><div class="sr-left"><div class="sr-label">Multiple Roblox instances</div><div class="sr-desc">Holds the singleton mutex so multiple clients run at once.</div></div><span class="badge g">Always On</span></div>
+            <div class="sr"><div class="sr-left"><div class="sr-label">Multiple Roblox instances</div><div class="sr-desc">Holds the singleton mutex so multiple clients run at once.</div></div><span class="badge g" id="stat-multi">Always On</span></div>
           </div>
 
           <!-- Anti-AFK -->
@@ -482,25 +482,9 @@
           <!-- Encryption -->
           <div class="sc">
             <div class="sc-head">Encryption</div>
-            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
-              <div class="sr-left"><div class="sr-label">Algorithm</div><div class="sr-desc">Used to encrypt cookies stored on disk.</div></div>
-              <div class="cdd" id="cdd-enc" style="width:100%">
-                <div class="cdd-trigger" id="cdd-enc-trigger" onclick="toggleCdd('enc')" role="button" tabindex="0" aria-label="Encryption algorithm">
-                  <span class="cdd-label" id="cdd-enc-label">AES-256-GCM</span>
-                  <span class="cdd-badge" id="cdd-enc-badge">Recommended</span>
-                  <span class="material-icons-round cdd-arrow">expand_more</span>
-                </div>
-                <div class="cdd-menu" id="cdd-enc-menu">
-                  <div class="cdd-option selected" data-value="aes-256-gcm" onclick="selectCdd('enc','aes-256-gcm')" role="button" tabindex="0">
-                    <div class="cdd-opt-left"><div class="cdd-opt-name">AES-256-GCM</div><div class="cdd-opt-desc">Authenticated - tamper-proof</div></div>
-                    <span class="badge g">Best</span><span class="material-icons-round cdd-check">check</span>
-                  </div>
-                  <div class="cdd-option" data-value="aes-256-cbc" onclick="selectCdd('enc','aes-256-cbc')" role="button" tabindex="0">
-                    <div class="cdd-opt-left"><div class="cdd-opt-name">AES-256-CBC</div><div class="cdd-opt-desc">Classic block cipher</div></div>
-                    <span class="badge muted">Standard</span><span class="material-icons-round cdd-check">check</span>
-                  </div>
-                </div>
-              </div>
+            <div class="sr">
+              <div class="sr-left"><div class="sr-label">Algorithm</div><div class="sr-desc" id="stat-enc-algo-desc">Used to encrypt cookies stored on disk.</div></div>
+              <span class="badge g" id="stat-enc-algo">AES-256-GCM</span>
             </div>
             <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
               <div class="sr-left" style="width:100%"><div class="sr-label">Encryption key</div><div class="sr-desc">Change your encryption key here. You will need to re-enter it on your next launch.</div></div>
@@ -811,6 +795,7 @@
     </div>
     <div id="enc-err" style="display:none;color:var(--red);font-size:12px;margin-top:6px"></div>
     <div class="modal-actions" style="margin-top:16px">
+      <button class="btn btn-danger" id="enc-clear-data" onclick="clearAppData()" title="Permanently deletes all saved accounts, settings and this key">Clear data</button>
       <button class="btn btn-primary" id="enc-action" onclick="submitEnc()">Unlock</button>
     </div>
   </div>
@@ -930,7 +915,7 @@
     <div class="prev" id="launch-prev"></div>
     <div class="mst hidden" id="launch-status"></div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('m-launch')">Cancel</button>
+      <button class="btn btn-ghost" id="btn-launch-cancel" onclick="cancelLaunchOrClose()">Cancel</button>
       <button class="btn btn-primary" id="btn-launch" onclick="doLaunch()">Start</button>
     </div>
   </div>

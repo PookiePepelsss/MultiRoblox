@@ -1,24 +1,10 @@
 // Account instance screenshots, optionally cropped to a per-account outlined
-// region, delivered to a Discord webhook. No files touch disk -- the native
-// helper's "capture" command encodes straight to base64 over stdout (see
-// RobloxNative.cs), so this module just decodes/re-encodes bytes in memory.
-use crate::native::hide_window;
+// region, delivered to a Discord webhook. No files touch disk -- the resident
+// helper's "capture" request returns the PNG as base64 on the same pipe it
+// serves everything else (see RobloxNative.cs), so this module just
+// decodes/re-encodes bytes in memory.
 use crate::state::AppState;
-use std::process::Stdio;
-use std::time::Duration;
 use tauri::AppHandle;
-
-fn decode_capture_output(stdout: &str) -> Result<Vec<u8>, String> {
-    let line = stdout
-        .lines()
-        .find(|l| l.starts_with("CAPTURED_B64:"))
-        .ok_or_else(|| "No image data returned".to_string())?;
-    let b64 = line["CAPTURED_B64:".len()..].trim();
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .map_err(|e| e.to_string())
-}
 
 pub async fn capture_account_png(app: &AppHandle, state: &AppState, account_id: &str, region: Option<(f64, f64, f64, f64)>) -> Result<Vec<u8>, String> {
     let pid = state
@@ -28,38 +14,57 @@ pub async fn capture_account_png(app: &AppHandle, state: &AppState, account_id: 
         .get(account_id)
         .copied()
         .ok_or_else(|| "No running instance for this account".to_string())?;
-    let exe = crate::native::ensure_native_helper(app, state)
-        .await
-        .ok_or_else(|| "Native helper unavailable".to_string())?;
 
-    let mut cmd = tokio::process::Command::new(&exe);
-    cmd.arg("capture").arg(pid.to_string());
-    if let Some((x, y, w, h)) = region {
-        cmd.arg(x.to_string()).arg(y.to_string()).arg(w.to_string()).arg(h.to_string());
-    }
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    hide_window(&mut cmd);
-    // Without this, a timeout below drops cmd.output()'s internal child
-    // without killing it -- the process leaks in the background instead of
-    // exiting, since nothing else ever holds a handle to it.
-    cmd.kill_on_drop(true);
+    let cmd = match region {
+        // Always '.' as the decimal separator; the helper parses these with
+        // the invariant culture to match.
+        Some((x, y, w, h)) => format!("capture|{}|{}|{}|{}|{}", pid, x, y, w, h),
+        None => format!("capture|{}", pid),
+    };
+    let b64 = crate::helper::call(app, state, &cmd, crate::helper::CAPTURE_TIMEOUT).await?;
 
-    let output = tokio::time::timeout(Duration::from_secs(15), cmd.output())
-        .await
-        .map_err(|_| "Capture timed out".to_string())?
-        .map_err(|e| e.to_string())?;
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(if err.trim().is_empty() { "Capture failed".to_string() } else { err.trim().to_string() });
-    }
-    decode_capture_output(&String::from_utf8_lossy(&output.stdout))
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .map_err(|e| e.to_string())
 }
 
 pub async fn capture_preview_b64(app: &AppHandle, state: &AppState, account_id: &str) -> Result<String, String> {
     let png = capture_account_png(app, state, account_id, None).await?;
     use base64::Engine;
     Ok(base64::engine::general_purpose::STANDARD.encode(&png))
+}
+
+// Screenshots of a logged-in game session are about as sensitive as this app
+// gets, and the destination is free text in the UI. Restrict it to real
+// Discord webhook endpoints so a typo -- or a URL pasted from somewhere else
+// -- can't quietly ship captures to a third party.
+const DISCORD_WEBHOOK_HOSTS: [&str; 6] = [
+    "discord.com",
+    "www.discord.com",
+    "canary.discord.com",
+    "ptb.discord.com",
+    "discordapp.com",
+    "www.discordapp.com",
+];
+
+pub fn validate_webhook_url(url: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(url.trim())
+        .map_err(|_| "That doesn't look like a URL. Paste the full Discord webhook URL.".to_string())?;
+    if parsed.scheme() != "https" {
+        return Err("The webhook URL must start with https://".to_string());
+    }
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    if !DISCORD_WEBHOOK_HOSTS.contains(&host.as_str()) {
+        return Err(format!(
+            "Only Discord webhooks are allowed, but this points at {}.",
+            if host.is_empty() { "no host" } else { &host }
+        ));
+    }
+    if !parsed.path().starts_with("/api/webhooks/") {
+        return Err("That's a Discord URL but not a webhook - it should look like https://discord.com/api/webhooks/...".to_string());
+    }
+    Ok(())
 }
 
 // Discord's multi-attachment webhook format: each file gets its own part
@@ -92,6 +97,9 @@ pub async fn capture_and_send(
     webhook_url: &str,
     regions: Vec<(f64, f64, f64, f64)>,
 ) -> Result<(), String> {
+    // Checked before capturing, not just before sending: no point taking a
+    // screenshot we're not allowed to deliver.
+    validate_webhook_url(webhook_url)?;
     let mut images = Vec::new();
     if regions.is_empty() {
         images.push(capture_account_png(app, state, account_id, None).await?);
@@ -102,4 +110,52 @@ pub async fn capture_and_send(
     }
     let content = format!("**{}** \u{2014} {}", username, chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
     send_to_discord_webhook(state, webhook_url, images, &content).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_real_discord_webhooks() {
+        for url in [
+            "https://discord.com/api/webhooks/123456/abcDEF-_123",
+            "https://canary.discord.com/api/webhooks/1/t",
+            "https://ptb.discord.com/api/webhooks/1/t",
+            "https://discordapp.com/api/webhooks/1/t",
+            "  https://discord.com/api/webhooks/1/t  ",
+        ] {
+            assert!(validate_webhook_url(url).is_ok(), "rejected {}", url);
+        }
+    }
+
+    #[test]
+    fn rejects_other_hosts() {
+        for url in [
+            "https://example.com/api/webhooks/1/t",
+            "https://discord.com.evil.test/api/webhooks/1/t",
+            "https://notdiscord.com/api/webhooks/1/t",
+            "https://discord.evil.com/api/webhooks/1/t",
+        ] {
+            assert!(validate_webhook_url(url).is_err(), "accepted {}", url);
+        }
+    }
+
+    #[test]
+    fn rejects_plaintext_http() {
+        assert!(validate_webhook_url("http://discord.com/api/webhooks/1/t").is_err());
+    }
+
+    #[test]
+    fn rejects_discord_urls_that_are_not_webhooks() {
+        assert!(validate_webhook_url("https://discord.com/channels/1/2").is_err());
+        assert!(validate_webhook_url("https://discord.com/").is_err());
+    }
+
+    #[test]
+    fn rejects_junk() {
+        for url in ["", "   ", "not a url", "discord.com/api/webhooks/1/t"] {
+            assert!(validate_webhook_url(url).is_err(), "accepted {:?}", url);
+        }
+    }
 }

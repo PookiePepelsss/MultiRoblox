@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use tokio::process::Child;
 
@@ -12,8 +13,18 @@ pub struct AppState {
     pub cached_key: Mutex<Option<[u8; 32]>>,
     pub cached_legacy_key: Mutex<Option<[u8; 32]>>,
 
-    pub mutex_child: Mutex<Option<Child>>,
-    pub antiafk_child: Mutex<Option<Child>>,
+    // The one resident RobloxNative.exe (see helper.rs). It replaces what used
+    // to be a separate child per concern -- mutex holder, anti-AFK, PID
+    // watcher -- plus a fresh one-shot process per launch for closehandles and
+    // per slider move for volume.
+    pub helper: tokio::sync::Mutex<Option<Arc<crate::helper::Helper>>>,
+    pub helper_child: Mutex<Option<Child>>,
+    pub helper_shutdown: AtomicBool,
+    pub helper_swept: AtomicBool,
+    pub helper_restarts: Mutex<Vec<i64>>,
+    pub helper_next_attempt: Mutex<i64>,
+    pub antiafk_on: AtomicBool,
+
     pub native_helper_path: Mutex<Option<Option<std::path::PathBuf>>>, // Some(None) = unavailable
     pub account_pids: Mutex<HashMap<String, u32>>,
     pub manual_priority: Mutex<HashMap<String, String>>,
@@ -21,15 +32,14 @@ pub struct AppState {
     pub miss_counts: Mutex<HashMap<String, u32>>,
     pub watch_handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub auto_relaunch_history: Mutex<HashMap<String, Vec<i64>>>,
-    pub watch_pid_child: Mutex<Option<Child>>,
     pub watch_pid_cache: Mutex<Option<std::collections::HashSet<u32>>>,
-    pub watch_pid_spawn_lock: tokio::sync::Mutex<()>,
-    pub watch_pid_generation: Mutex<u64>,
 
     pub csrf_cache: Mutex<HashMap<String, (String, i64)>>,
     pub ticket_cache: Mutex<HashMap<String, (String, i64)>>,
     pub last_launch_ts: Mutex<i64>,
     pub launch_lock: tokio::sync::Mutex<()>,
+    /// account id -> flag the UI can set to abandon an in-flight launch.
+    pub launch_cancel: Mutex<HashMap<String, Arc<AtomicBool>>>,
 
     pub login_cancel: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
@@ -46,8 +56,13 @@ impl AppState {
             session_pass: Mutex::new(None),
             cached_key: Mutex::new(None),
             cached_legacy_key: Mutex::new(None),
-            mutex_child: Mutex::new(None),
-            antiafk_child: Mutex::new(None),
+            helper: tokio::sync::Mutex::new(None),
+            helper_child: Mutex::new(None),
+            helper_shutdown: AtomicBool::new(false),
+            helper_swept: AtomicBool::new(false),
+            helper_restarts: Mutex::new(Vec::new()),
+            helper_next_attempt: Mutex::new(0),
+            antiafk_on: AtomicBool::new(false),
             native_helper_path: Mutex::new(None),
             account_pids: Mutex::new(HashMap::new()),
             manual_priority: Mutex::new(HashMap::new()),
@@ -55,14 +70,12 @@ impl AppState {
             miss_counts: Mutex::new(HashMap::new()),
             watch_handle: Mutex::new(None),
             auto_relaunch_history: Mutex::new(HashMap::new()),
-            watch_pid_child: Mutex::new(None),
             watch_pid_cache: Mutex::new(None),
-            watch_pid_spawn_lock: tokio::sync::Mutex::new(()),
-            watch_pid_generation: Mutex::new(0),
             csrf_cache: Mutex::new(HashMap::new()),
             ticket_cache: Mutex::new(HashMap::new()),
             last_launch_ts: Mutex::new(0),
             launch_lock: tokio::sync::Mutex::new(()),
+            launch_cancel: Mutex::new(HashMap::new()),
             login_cancel: Mutex::new(None),
         }
     }

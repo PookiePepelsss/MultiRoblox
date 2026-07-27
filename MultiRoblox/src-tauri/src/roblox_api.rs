@@ -42,6 +42,7 @@ pub async fn fetch_user_info(state: &AppState, cookie: &str) -> UserInfo {
         .get("https://users.roblox.com/v1/users/authenticated")
         .header("Cookie", format!(".ROBLOSECURITY={}", cookie))
         .header("Accept", "application/json")
+        .timeout(Duration::from_secs(8))
         .send()
         .await;
     match res {
@@ -96,6 +97,7 @@ pub async fn get_roblox_version(state: &AppState, channel: Option<&str>) -> Resu
         .http
         .get(&url)
         .header("User-Agent", UA)
+        .timeout(Duration::from_secs(8))
         .send()
         .await
         .map_err(|e| format!("network error: {e}"))?;
@@ -129,6 +131,7 @@ async fn csrf_from_endpoint(state: &AppState, cookie: &str, endpoint: &str) -> O
         .header("Accept", "application/json")
         .header("Content-Type", "application/json")
         .header("Content-Length", "0")
+        .timeout(Duration::from_secs(8))
         .body("")
         .send()
         .await
@@ -218,6 +221,7 @@ pub async fn get_auth_ticket(
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .header("Content-Length", "0")
+            .timeout(Duration::from_secs(8))
             .body("");
         if let Some(t) = &token {
             req = req.header("X-CSRF-TOKEN", t.as_str());
@@ -401,6 +405,7 @@ pub async fn follow_redirect(state: &AppState, url: &str) -> String {
         .http_no_redirect
         .get(url)
         .header("User-Agent", UA)
+        .timeout(Duration::from_secs(8))
         .send()
         .await
     {
@@ -542,6 +547,7 @@ pub async fn get_access_code(
         .header("Origin", "https://www.roblox.com")
         .header("Referer", "https://www.roblox.com")
         .header("User-Agent", UA)
+        .timeout(Duration::from_secs(8))
         .body(body)
         .send()
         .await;
@@ -603,6 +609,7 @@ pub async fn get_json_public(state: &AppState, url: &str) -> Result<Value, Strin
         .get(url)
         .header("Accept", "application/json")
         .header("User-Agent", UA)
+        .timeout(Duration::from_secs(10))
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -610,6 +617,76 @@ pub async fn get_json_public(state: &AppState, url: &str) -> Result<Value, Strin
     let ok = res.status().is_success();
     let data: Value = res.json().await.unwrap_or(Value::Null);
     Ok(serde_json::json!({ "ok": ok, "status": status, "data": data }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn place_id_from_a_bare_id() {
+        assert_eq!(extract_place_id("1818"), Some("1818".into()));
+        assert_eq!(extract_place_id("  1818  "), Some("1818".into()));
+    }
+
+    #[test]
+    fn place_id_from_game_urls() {
+        for input in [
+            "https://www.roblox.com/games/1818/Classic-Crossroads",
+            "www.roblox.com/games/1818/Classic-Crossroads",
+            "https://www.roblox.com/games/1818",
+        ] {
+            assert_eq!(extract_place_id(input), Some("1818".into()), "failed for {}", input);
+        }
+    }
+
+    #[test]
+    fn place_id_from_a_query_parameter() {
+        assert_eq!(
+            extract_place_id("https://www.roblox.com/games/start?placeId=1818"),
+            Some("1818".into())
+        );
+    }
+
+    #[test]
+    fn place_id_rejects_non_numeric_and_junk() {
+        assert_eq!(extract_place_id(""), None);
+        assert_eq!(extract_place_id("not a link"), None);
+        assert_eq!(extract_place_id("https://www.roblox.com/games/abc/Name"), None);
+        assert_eq!(extract_place_id("https://www.roblox.com/users/1818/profile"), None);
+    }
+
+    #[test]
+    fn roblox_errors_use_the_human_message() {
+        assert_eq!(
+            extract_roblox_error(r#"{"errors":[{"code":0,"message":"Token Validation Failed"}]}"#),
+            "Token Validation Failed"
+        );
+        assert_eq!(extract_roblox_error(r#"{"message":"Too many requests"}"#), "Too many requests");
+    }
+
+    #[test]
+    fn non_json_errors_fall_back_to_a_truncated_body() {
+        assert_eq!(extract_roblox_error("<html>502</html>"), "<html>502</html>");
+        let long = "x".repeat(500);
+        assert_eq!(extract_roblox_error(&long).len(), 200, "body is capped");
+    }
+
+    #[test]
+    fn share_link_extraction_needs_both_ids() {
+        let body = r#"{"placeId":1818,"linkCode":"abc-DEF_123"}"#;
+        assert_eq!(extract_place_link(body), Some(("1818".into(), "abc-DEF_123".into())));
+        assert_eq!(extract_place_link(r#"{"placeId":1818}"#), None, "no link code");
+        assert_eq!(extract_place_link(r#"{"linkCode":"abc"}"#), None, "no place id");
+    }
+
+    #[test]
+    fn share_link_accepts_the_other_code_field_names() {
+        for field in ["privateServerLinkCode", "accessCode", "linkcode"] {
+            let body = format!(r#"{{"placeId":7,"{}":"zzz"}}"#, field);
+            assert_eq!(extract_place_link(&body), Some(("7".into(), "zzz".into())), "failed for {}", field);
+        }
+    }
 }
 
 // Same CORS gap as roblox.com above -- see altgen.me/docs/generate-accounts.
@@ -624,6 +701,7 @@ pub async fn altgen_generate(
         .post("https://api.altgen.me/api/v1/generate")
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
+        .timeout(Duration::from_secs(15))
         .json(&body)
         .send()
         .await

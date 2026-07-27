@@ -602,6 +602,10 @@ body.theme-graphite{--bg:#0d0e10;--s1:#131418;--s2:#1a1c21;--s3:#23262d;--s4:#2e
 .ctx-submenu{position:absolute;left:100%;top:-4px;min-width:170px;background:var(--s2);border:1px solid var(--bd2);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.45),0 2px 8px rgba(0,0,0,.3);padding:4px;opacity:0;pointer-events:none;transform:translateX(-4px);transition:opacity 120ms var(--smooth),transform 120ms var(--smooth)}
 .ctx-item.ctx-active{background:var(--ac2)}
 .ctx-has-sub:hover .ctx-submenu{opacity:1;pointer-events:all;transform:translateX(0)}
+/* Set by positionCardSubmenu() when opening rightwards would leave the window:
+   mirror the anchor and the slide-in direction. */
+.ctx-has-sub.ctx-flip-x .ctx-submenu{left:auto;right:100%;transform:translateX(4px)}
+.ctx-has-sub.ctx-flip-x:hover .ctx-submenu{transform:translateX(0)}
 
 /* ── Logs page ───────────────────────────────────────────────────────────── */
 /* ── Logs console: monospace row-per-entry, severity accent bar, native find ── */

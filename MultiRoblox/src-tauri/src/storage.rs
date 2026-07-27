@@ -4,14 +4,11 @@ use crate::state::AppState;
 use serde_json::Value;
 
 fn read_json_array(path: &std::path::Path) -> Vec<Value> {
-    match std::fs::read_to_string(path) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
+    crate::jsonfile::read_array(path)
 }
 pub fn write_json_array(path: &std::path::Path, v: &[Value]) -> std::io::Result<()> {
     let json = serde_json::to_string_pretty(v).unwrap_or_else(|_| "[]".into());
-    std::fs::write(path, json)
+    crate::jsonfile::write_atomic(path, &json)
 }
 
 pub fn load_accounts_raw() -> Vec<Value> {
@@ -51,11 +48,22 @@ pub fn load_accounts(state: &AppState) -> Vec<Value> {
 }
 
 pub fn save_accounts(state: &AppState, accounts: Vec<Value>) -> Result<(), String> {
+    // The file is there but didn't parse, so what we just loaded is an empty
+    // list rather than the real accounts. Writing that back would destroy the
+    // only copy -- refuse, and point at the backup instead.
+    let path = accounts_path();
+    if crate::jsonfile::is_unreadable(&path) {
+        return Err(
+            "accounts.json could not be read, so saving was stopped to avoid overwriting it. \
+             A copy is at accounts.corrupt-backup.json - fix or remove accounts.json, then restart."
+                .into(),
+        );
+    }
     let mut out = Vec::with_capacity(accounts.len());
     for a in accounts {
         out.push(encrypt_account(state, a)?);
     }
-    write_json_array(&accounts_path(), &out).map_err(|e| e.to_string())
+    write_json_array(&path, &out).map_err(|e| e.to_string())
 }
 
 // One-time upgrade of legacy (gcm:/cbc:) cookies to DPAPI storage. Skipped

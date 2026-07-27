@@ -37,11 +37,13 @@
     onAllRobloxClosed: (cb) => listen('roblox:allClosed', () => cb()),
 
     launchRoblox: (id, cookie, target) => invoke('roblox_launch', { id, cookie, target }),
+    cancelLaunch: (id) => invoke('roblox_launch_cancel', { id }),
     openExternal: (url) => invoke('open_external', { url }),
     getAppVersion: () => invoke('app_version'),
 
     trackingCapturePreview: (id) => invoke('tracking_capture_preview', { id }),
     trackingCaptureAndSend: (id, username, webhookUrl, regions) => invoke('tracking_capture_and_send', { id, username, webhookUrl, regions }),
+    trackingValidateWebhook: (url) => invoke('tracking_validate_webhook', { url }),
 
     loadSettings: () => invoke('settings_load'),
     saveSettings: (data) => invoke('settings_save', { data }),
@@ -49,6 +51,7 @@
     encStatus: () => invoke('enc_status'),
     encUnlock: (pass) => invoke('enc_unlock', { pass }),
     encSetKey: (pass) => invoke('enc_set_key', { pass }),
+    clearAppData: () => invoke('clear_app_data'),
 
     multiInstanceStatus: () => invoke('multiinstance_status'),
     antiAfkStatus: () => invoke('antiafk_status'),

@@ -6,7 +6,6 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub(crate) fn hide_window(cmd: &mut Command) {
@@ -48,15 +47,40 @@ fn bundled_native_exe_path(app: &AppHandle) -> Option<PathBuf> {
 // resources/ folder; extracted to the app data dir on first use.
 const EMBEDDED_NATIVE_EXE: &[u8] = include_bytes!("../resources/RobloxNative.exe");
 
+static EMBEDDED_NATIVE_SHA: once_cell::sync::Lazy<[u8; 32]> = once_cell::sync::Lazy::new(|| {
+    use sha2::Digest;
+    sha2::Sha256::digest(EMBEDDED_NATIVE_EXE).into()
+});
+
+// Content-hashed, not length-compared. The helper speaks a line protocol now,
+// so an older extracted copy isn't merely stale -- it doesn't understand
+// "daemon" at all, prints usage to stderr and exits immediately, which the
+// supervisor would then see as a crash and restart forever. A same-length
+// build is unlikely but entirely possible, and the failure mode is an endless
+// stream of spawned processes, so this compares what's actually in the file.
 fn ensure_embedded_native_exe() -> Option<PathBuf> {
     let out = app_data_dir().join("RobloxNative.exe");
-    let needs_write = match std::fs::metadata(&out) {
-        Ok(meta) => meta.len() != EMBEDDED_NATIVE_EXE.len() as u64,
+    let needs_write = match std::fs::read(&out) {
+        Ok(bytes) => {
+            use sha2::Digest;
+            let on_disk: [u8; 32] = sha2::Sha256::digest(&bytes).into();
+            on_disk != *EMBEDDED_NATIVE_SHA
+        }
         Err(_) => true,
     };
     if needs_write {
         std::fs::create_dir_all(out.parent()?).ok()?;
-        std::fs::write(&out, EMBEDDED_NATIVE_EXE).ok()?;
+        // A running helper holds this file open and the write fails; callers
+        // sweep strays before extracting, so that's already handled.
+        if let Err(e) = std::fs::write(&out, EMBEDDED_NATIVE_EXE) {
+            eprintln!("[helper] could not refresh RobloxNative.exe: {}", e);
+            // Only fall through to the existing copy if there is one -- better
+            // a stale helper than none, and the version check above will retry
+            // on the next run.
+            if !out.exists() {
+                return None;
+            }
+        }
     }
     Some(out)
 }
@@ -133,6 +157,10 @@ async fn resolve_native_helper(app: &AppHandle) -> Option<PathBuf> {
     ]);
     hide_window(&mut cmd);
     cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+    // Same leak as the RobloxNative.exe timeout fixes elsewhere: without
+    // this, a timeout below drops output_timeout's internal child without
+    // killing it, leaking a stuck csc.exe.
+    cmd.kill_on_drop(true);
     let ok = match cmd.output_timeout(Duration::from_secs(30)).await {
         Some(Ok(output)) => output.status.success() && out_exe.exists(),
         _ => out_exe.exists(),
@@ -157,104 +185,84 @@ impl OutputTimeout for Command {
     }
 }
 
-// ---- mutex holder ----
-// Windows only releases a named mutex when the owning process fully exits,
-// so stop_mutex_holder waits for the real exit event, not just kill().
+// ---- singleton mutex ----
+// The one helper process owns ROBLOX_singletonMutex on a dedicated thread for
+// the whole session (see helper.rs / MutexHolder in RobloxNative.cs). Nothing
+// here spawns or kills a process any more -- these just tell the daemon which
+// state to be in, and block until it has actually applied it.
 pub async fn start_mutex_holder(app: &AppHandle, state: &AppState) {
-    {
-        let guard = state.mutex_child.lock().unwrap();
-        if guard.is_some() {
-            return;
-        }
-    }
-    let Some(exe) = ensure_native_helper(app, state).await else {
+    if crate::helper::ensure(app, state).await.is_none() {
         eprintln!("[mutex] native helper unavailable");
-        return;
-    };
-    let mut cmd = Command::new(&exe);
-    cmd.arg("mutex")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    hide_window(&mut cmd);
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    if let Some(stdout) = child.stdout.take() {
-        let held = std::sync::Arc::new(AtomicBool::new(false));
-        let held2 = held.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if line.contains("MUTEX_HELD") {
-                    held2.store(true, Ordering::SeqCst);
-                }
-            }
-        });
-        // Safety fallback only, mirroring the 8s timeout in main.js: normally
-        // MUTEX_HELD prints almost immediately, well before the slow handle scan.
-        for _ in 0..80 {
-            if held.load(Ordering::SeqCst) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
-    if let Some(stderr) = child.stderr.take() {
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if !line.trim().is_empty() {
-                    eprintln!("[mutex] {}", line.trim());
-                }
-            }
-        });
-    }
-    *state.mutex_child.lock().unwrap() = Some(child);
-}
-
-// Fire-and-forget: doesn't wait for the OS to actually release the mutex.
-pub fn stop_mutex_holder(state: &AppState) {
-    let child = state.mutex_child.lock().unwrap().take();
-    if let Some(mut child) = child {
-        let _ = child.start_kill();
-        tauri::async_runtime::spawn(async move {
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
-        });
     }
 }
 
-// Waits for the old holder to actually exit before a caller respawns a new
-// one -- otherwise the new holder can win a false "mutex created" race
-// while the OS handle is still held, corrupting Roblox's install pipeline.
-async fn stop_mutex_holder_and_wait(state: &AppState) {
-    let child = state.mutex_child.lock().unwrap().take();
-    if let Some(mut child) = child {
-        let _ = child.start_kill();
-        let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+pub async fn set_multi_instance(app: &AppHandle, state: &AppState, on: bool) {
+    let cmd = if on { "mutex|on" } else { "mutex|off" };
+    if let Err(e) = crate::helper::call(app, state, cmd, crate::helper::SLOW_TIMEOUT).await {
+        eprintln!("[mutex] {}: {}", cmd, e);
     }
 }
 
+// Re-acquires the mutex and re-closes any singleton handles. Roblox exiting
+// can leave the name in a state where a fresh acquire is the only way to be
+// certain we still own it, which is why kill-all runs this.
 pub async fn restart_mutex_holder(app: &AppHandle, state: &AppState) {
-    stop_mutex_holder_and_wait(state).await;
-    start_mutex_holder(app, state).await;
+    if let Err(e) =
+        crate::helper::call(app, state, "mutex|rehold", crate::helper::SLOW_TIMEOUT).await
+    {
+        eprintln!("[mutex] rehold: {}", e);
+    }
+}
+
+// Stops the helper and waits for it to actually exit -- called right before
+// wiping app data, since the running helper holds its own exe file (which
+// lives in that folder) open, and Windows won't delete a folder out from
+// under an open handle.
+pub async fn stop_all_native_helpers(state: &AppState) {
+    if let Some(handle) = state.watch_handle.lock().unwrap().take() {
+        handle.abort();
+    }
+    state
+        .antiafk_on
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    crate::helper::shutdown(state).await;
+}
+
+// Resets every in-memory field that could otherwise point at data which no
+// longer exists after a full app-data wipe (a memoized helper-exe path, a
+// cached decryption key derived from a now-deleted salt, tracked PIDs for
+// accounts that no longer exist, etc). Deliberately leaves login_cancel
+// alone -- an in-progress login window closing on its own is harmless.
+pub fn reset_state_for_wipe(state: &AppState) {
+    *state.session_pass.lock().unwrap() = None;
+    *state.cached_key.lock().unwrap() = None;
+    *state.cached_legacy_key.lock().unwrap() = None;
+    *state.native_helper_path.lock().unwrap() = None;
+    // Lift the shutdown latch stop_all_native_helpers set, so the helper is
+    // allowed to start again once the folder has been re-created. The sweep
+    // flag stays set -- we just stopped the only helper there was, so there's
+    // nothing stray to clear.
+    state
+        .helper_shutdown
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    state.account_pids.lock().unwrap().clear();
+    state.manual_priority.lock().unwrap().clear();
+    state.watched_accounts.lock().unwrap().clear();
+    state.miss_counts.lock().unwrap().clear();
+    state.auto_relaunch_history.lock().unwrap().clear();
+    state.csrf_cache.lock().unwrap().clear();
+    state.ticket_cache.lock().unwrap().clear();
+    *state.last_launch_ts.lock().unwrap() = 0;
 }
 
 // ---- anti-AFK ----
+// Runs on a background thread inside the one helper process. Toggling it is a
+// request, not a spawn/kill, so switching it on and off repeatedly can't leave
+// a stray process behind.
 pub async fn start_antiafk(app: &AppHandle, state: &AppState) {
     if !cfg!(windows) {
         return;
     }
-    {
-        if state.antiafk_child.lock().unwrap().is_some() {
-            return;
-        }
-    }
-    let Some(exe) = ensure_native_helper(app, state).await else {
-        eprintln!("[antiafk] native helper unavailable; cannot run anti-AFK");
-        return;
-    };
     let s = crate::settings::load_settings();
     let mut deadline = s
         .get("antiAfkInterval")
@@ -263,81 +271,54 @@ pub async fn start_antiafk(app: &AppHandle, state: &AppState) {
     if deadline < 60 {
         deadline = 19 * 60; // 19 min, under the ~20-min idle kick
     }
-    let mut cmd = Command::new(&exe);
-    cmd.args(["antiafk", &deadline.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    hide_window(&mut cmd);
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[antiafk] spawn failed: {}", e);
-            return;
-        }
-    };
-    emit_log(
+    // vk 0 = helper default (VK_SHIFT).
+    match crate::helper::call(
         app,
-        "ok",
-        "afk",
-        &format!("Anti-AFK started (interval: {} min)", deadline / 60),
-        Some(serde_json::json!({ "intervalSec": deadline })),
-    );
-
-    if let Some(stdout) = child.stdout.take() {
-        let app2 = app.clone();
-        tokio::spawn(async move {
-            let mw = regex::Regex::new(r"(?i)tapped\s+(\d+)\s+window").unwrap();
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let t = line.trim();
-                if t.is_empty() {
-                    continue;
-                }
-                if let Some(caps) = mw.captures(t) {
-                    let n = &caps[1];
-                    let plural = if n == "1" { "" } else { "s" };
-                    emit_log(
-                        &app2,
-                        "info",
-                        "afk",
-                        &format!("Anti-AFK: tapped {} Roblox window{}", n, plural),
-                        Some(serde_json::json!({ "windows": n.parse::<i64>().unwrap_or(0) })),
-                    );
-                } else {
-                    emit_log(&app2, "info", "afk", &format!("Anti-AFK: {}", t), None);
-                }
-            }
-        });
+        state,
+        &format!("antiafk|{}|0", deadline),
+        crate::helper::DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        Ok(_) => {
+            state
+                .antiafk_on
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            emit_log(
+                app,
+                "ok",
+                "afk",
+                &format!("Anti-AFK started (interval: {} min)", deadline / 60),
+                Some(serde_json::json!({ "intervalSec": deadline })),
+            );
+        }
+        Err(e) => {
+            eprintln!("[antiafk] {}", e);
+            emit_log(
+                app,
+                "warn",
+                "afk",
+                &format!("Could not start Anti-AFK: {}", e),
+                None,
+            );
+        }
     }
-    if let Some(stderr) = child.stderr.take() {
-        let app2 = app.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let t = line.trim();
-                if !t.is_empty() {
-                    eprintln!("[antiafk] {}", t);
-                    emit_log(
-                        &app2,
-                        "warn",
-                        "afk",
-                        &format!("Anti-AFK warning: {}", t),
-                        None,
-                    );
-                }
-            }
-        });
-    }
-    *state.antiafk_child.lock().unwrap() = Some(child);
 }
 
 pub fn stop_antiafk(state: &AppState) {
-    emit_log(&state.app_handle, "warn", "afk", "Anti-AFK stopped", None);
-    let child = state.antiafk_child.lock().unwrap().take();
-    if let Some(mut child) = child {
-        let _ = child.start_kill(); // synchronous signal -- must not be deferred into a spawn, or app-exit can race past it unsent
+    if !state
+        .antiafk_on
+        .swap(false, std::sync::atomic::Ordering::SeqCst)
+    {
+        return; // wasn't running; don't log a stop that never happened
     }
+    emit_log(&state.app_handle, "warn", "afk", "Anti-AFK stopped", None);
+    // Fire-and-forget: the helper stops its own thread. Nothing to reap.
+    let app = state.app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let st = app.state::<AppState>();
+        let _ = crate::helper::call(&app, &st, "antiafk|0", crate::helper::DEFAULT_TIMEOUT).await;
+    });
 }
 
 // `extra` must stay nested under "meta" -- renderer.js's log handler expects it there.
@@ -374,41 +355,28 @@ async fn tasklist(filter_image: &str) -> Option<String> {
     }
 }
 
-// Preferred over tasklist() -- asks the native helper directly instead of
-// shelling out and regex-parsing CSV. Falls back to tasklist() if the
-// helper isn't resolved yet.
+// Asks the resident helper instead of shelling out and regex-parsing CSV.
+// Falls back to tasklist() only if the helper can't be started at all.
 async fn native_pids(app: &AppHandle, state: &AppState) -> Option<std::collections::HashSet<u32>> {
     if !cfg!(windows) {
         return Some(std::collections::HashSet::new());
     }
-    let Some(exe) = ensure_native_helper(app, state).await else {
-        let out = tasklist("RobloxPlayerBeta.exe").await?;
-        let re = regex::Regex::new(r#""RobloxPlayerBeta\.exe","(\d+)""#).unwrap();
-        return Some(
-            re.captures_iter(&out)
-                .filter_map(|c| c[1].parse::<u32>().ok())
+    match crate::helper::call(app, state, "pids", Duration::from_secs(10)).await {
+        Ok(payload) => Some(
+            payload
+                .split(',')
+                .filter_map(|s| s.trim().parse::<u32>().ok())
                 .collect(),
-        );
-    };
-    let mut cmd = Command::new(&exe);
-    cmd.arg("pids")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    hide_window(&mut cmd);
-    // See the kill_on_drop comment in set_roblox_volume below -- same leak,
-    // same fix, on the "pids" one-shot instead of "volume".
-    cmd.kill_on_drop(true);
-    match tokio::time::timeout(Duration::from_secs(10), cmd.output()).await {
-        Ok(Ok(out)) if out.status.success() => {
-            let s = String::from_utf8_lossy(&out.stdout);
+        ),
+        Err(_) => {
+            let out = tasklist("RobloxPlayerBeta.exe").await?;
+            let re = regex::Regex::new(r#""RobloxPlayerBeta\.exe","(\d+)""#).unwrap();
             Some(
-                s.lines()
-                    .filter_map(|l| l.trim().parse::<u32>().ok())
+                re.captures_iter(&out)
+                    .filter_map(|c| c[1].parse::<u32>().ok())
                     .collect(),
             )
         }
-        _ => None,
     }
 }
 
@@ -417,42 +385,41 @@ pub async fn set_roblox_volume(app: &AppHandle, state: &AppState, percent: f64) 
         return serde_json::json!({ "ok": false, "count": 0, "error": "Windows only" });
     }
     let pct = percent.round().clamp(0.0, 100.0) as i64;
-    let Some(exe) = ensure_native_helper(app, state).await else {
-        return serde_json::json!({ "ok": false, "count": 0, "error": "native helper unavailable" });
-    };
-    let mut cmd = Command::new(&exe);
-    cmd.args(["volume", &pct.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    hide_window(&mut cmd);
-    // tokio::time::timeout wrapping cmd.output() below: on timeout, the
-    // future (and the child it owns internally) is just dropped -- without
-    // kill_on_drop that leaves RobloxNative.exe running forever, orphaned,
-    // with no Child handle left anywhere to clean it up. This runs once per
-    // launch (see do_launch), so a timeout here is exactly "one more
-    // RobloxNative.exe every time I open Roblox".
-    cmd.kill_on_drop(true);
-    match tokio::time::timeout(Duration::from_secs(12), cmd.output()).await {
-        Ok(Ok(out)) => {
-            let s = String::from_utf8_lossy(&out.stdout);
-            let re = regex::Regex::new(r"SET:(\d+)").unwrap();
-            let count = re
-                .captures(&s)
-                .and_then(|c| c[1].parse::<i64>().ok())
-                .unwrap_or(0);
+    match crate::helper::call(
+        app,
+        state,
+        &format!("volume|{}", pct),
+        crate::helper::DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        Ok(payload) => {
+            let count = payload.trim().parse::<i64>().unwrap_or(0);
             serde_json::json!({ "ok": true, "count": count })
         }
-        Ok(Err(e)) => serde_json::json!({ "ok": false, "count": 0, "error": e.to_string() }),
-        Err(_) => serde_json::json!({ "ok": true, "count": 0 }),
+        Err(e) => serde_json::json!({ "ok": false, "count": 0, "error": e }),
     }
 }
 
+// Instances this app launched and can still see, which is exactly the set
+// Kill acts on. Counting every RobloxPlayerBeta.exe on the machine would
+// report windows the user opened themselves -- and then Kill would leave them
+// running, so the badge and the button would disagree.
+fn owned_running_count(state: &AppState, alive: &std::collections::HashSet<u32>) -> u32 {
+    state
+        .account_pids
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|pid| alive.contains(pid))
+        .count() as u32
+}
+
 pub async fn count_roblox_processes(app: &AppHandle, state: &AppState) -> u32 {
-    cached_or_spawn_pids(app, state)
-        .await
-        .map(|s| s.len() as u32)
-        .unwrap_or(0)
+    match cached_or_spawn_pids(app, state).await {
+        Some(alive) => owned_running_count(state, &alive),
+        None => 0,
+    }
 }
 
 // Just hands idle physical pages back to the OS -- doesn't touch the
@@ -549,8 +516,8 @@ pub fn clear_manual_priority(state: &AppState, account_id: &str) {
 // after every launch/kill so it self-corrects back to Normal once only one
 // instance is left running. Accounts with a manual override (right-click ->
 // Set priority) are skipped so the automatic rule doesn't stomp on it.
-async fn apply_priority_policy(state: &AppState) {
-    let enabled = crate::settings::load_settings()
+async fn apply_priority_policy(state: &AppState, settings: &serde_json::Map<String, Value>) {
+    let enabled = settings
         .get("lowPriorityMultiInstance")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
@@ -632,24 +599,24 @@ pub async fn trim_account_memory(app: &AppHandle, state: &AppState, account_id: 
     }
 }
 
-static ROBLOX_PROC_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
-    regex::Regex::new(r"(?i)RobloxPlayerBeta\.exe|RobloxCrashHandler\.exe").unwrap()
-});
-
-async fn wait_for_roblox_fully_closed(max_wait: Duration) {
+// Waits for specific PIDs to disappear. Scoped to our own processes: a
+// blanket "no RobloxPlayerBeta.exe anywhere" wait would never be satisfied
+// while an instance the user started outside MultiRoblox is still open.
+async fn wait_for_pids_closed(
+    app: &AppHandle,
+    state: &AppState,
+    pids: &[u32],
+    max_wait: Duration,
+) {
     let started = std::time::Instant::now();
     loop {
-        let mut cmd = Command::new("cmd");
-        cmd.args([
-            "/c",
-            r#"tasklist /FI "IMAGENAME eq RobloxPlayerBeta.exe" /NH & tasklist /FI "IMAGENAME eq RobloxCrashHandler.exe" /NH"#,
-        ]);
-        hide_window(&mut cmd);
-        let out = match cmd.output().await {
-            Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
-            Err(_) => return,
-        };
-        if !ROBLOX_PROC_RE.is_match(&out) || started.elapsed() >= max_wait {
+        match native_pids(app, state).await {
+            // Couldn't enumerate -- no point spinning on an unanswerable question.
+            None => return,
+            Some(alive) if !pids.iter().any(|p| alive.contains(p)) => return,
+            _ => {}
+        }
+        if started.elapsed() >= max_wait {
             return;
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -664,8 +631,18 @@ pub async fn kill_all_roblox(app: &AppHandle, state: &AppState) -> Value {
         .keys()
         .cloned()
         .collect();
+    // Snapshot before clearing: these PIDs are the ones this app launched and
+    // the only ones it has any business killing.
+    let pids: Vec<u32> = state.account_pids.lock().unwrap().values().copied().collect();
+    // Watched accounts with no attributed PID (URI-handler launches where the
+    // process was never identified) can't be targeted -- report them rather
+    // than quietly leaving them running.
+    let untracked = watched_ids.len().saturating_sub(pids.len());
+
     state.watched_accounts.lock().unwrap().clear();
     state.miss_counts.lock().unwrap().clear();
+    state.account_pids.lock().unwrap().clear();
+    state.manual_priority.lock().unwrap().clear();
     stop_watch_poll_if_idle(state);
 
     let notify = |app: &AppHandle, ids: &[String]| {
@@ -679,29 +656,29 @@ pub async fn kill_all_roblox(app: &AppHandle, state: &AppState) -> Value {
         notify(app, &watched_ids);
         return serde_json::json!({ "ok": false, "error": "Windows only" });
     }
+    if pids.is_empty() {
+        notify(app, &watched_ids);
+        return serde_json::json!({ "ok": true, "killed": 0, "untracked": untracked });
+    }
 
+    // One taskkill listing every PID. /T takes each client's own children
+    // (RobloxCrashHandler) with it, which is why that image name no longer
+    // needs killing by name.
+    let mut args = String::from("taskkill /F /T");
+    for pid in &pids {
+        args.push_str(&format!(" /PID {}", pid));
+    }
     let mut cmd = Command::new("cmd");
-    cmd.args([
-        "/c",
-        "taskkill /F /IM RobloxPlayerBeta.exe /T & taskkill /F /IM RobloxCrashHandler.exe /T",
-    ]);
+    cmd.args(["/c", &args]);
     hide_window(&mut cmd);
-    state.account_pids.lock().unwrap().clear();
-    state.manual_priority.lock().unwrap().clear();
-    let had_running = !watched_ids.is_empty();
+    cmd.kill_on_drop(true);
 
     let result = tokio::time::timeout(Duration::from_secs(6), cmd.output()).await;
-    wait_for_roblox_fully_closed(Duration::from_secs(5)).await;
-    if had_running {
-        restart_mutex_holder(app, state).await;
-    } else {
-        start_mutex_holder(app, state).await;
-    }
+    wait_for_pids_closed(app, state, &pids, Duration::from_secs(5)).await;
+    restart_mutex_holder(app, state).await;
     notify(app, &watched_ids);
-    match result {
-        Ok(Ok(_)) => serde_json::json!({ "ok": true }),
-        _ => serde_json::json!({ "ok": true }),
-    }
+    let _ = result;
+    serde_json::json!({ "ok": true, "killed": pids.len(), "untracked": untracked })
 }
 
 pub async fn kill_account_roblox(app: &AppHandle, state: &AppState, account_id: &str) -> Value {
@@ -728,59 +705,28 @@ pub async fn kill_account_roblox(app: &AppHandle, state: &AppState, account_id: 
     hide_window(&mut cmd);
     let _ = tokio::time::timeout(Duration::from_secs(4), cmd.output()).await;
     notify(app);
-    apply_priority_policy(state).await;
+    apply_priority_policy(state, &crate::settings::load_settings()).await;
     serde_json::json!({ "ok": true })
 }
 
-fn close_singleton_handles_only<'a>(
-    app: &'a AppHandle,
-    state: &'a AppState,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
-    Box::pin(async move {
-        let Some(exe) = ensure_native_helper(app, state).await else {
-            return;
-        };
-        let mut cmd = Command::new(&exe);
-        cmd.arg("closehandles")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        hide_window(&mut cmd);
-        let Ok(mut child) = cmd.spawn() else { return };
-        if let Some(stdout) = child.stdout.take() {
-            let done = std::sync::Arc::new(AtomicBool::new(false));
-            let done2 = done.clone();
-            tokio::spawn(async move {
-                let mut lines = BufReader::new(stdout).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if line.contains("HANDLES_DONE") {
-                        done2.store(true, Ordering::SeqCst);
-                        break;
-                    }
-                }
-            });
-            for _ in 0..40 {
-                if done.load(Ordering::SeqCst) {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-        // start_kill() only signals termination -- it doesn't confirm the
-        // process actually exited. Without an explicit wait(), a closehandles
-        // process that's slow to die (or that the kill signal races with)
-        // stays alive in the background, and since this runs on every single
-        // launch, that's exactly the kind of thing that looks like "a new
-        // RobloxNative process every time I launch an account".
-        let _ = child.start_kill();
-        let _ = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
-    })
+// Runs before every launch. Used to spawn (and then have to reap) a fresh
+// one-shot process each time -- the single biggest source of "a new
+// RobloxNative process every time I launch an account". Now it's one request
+// on the pipe the helper is already holding open.
+async fn close_singleton_handles_only(app: &AppHandle, state: &AppState) {
+    if let Err(e) = crate::helper::call(app, state, "closehandles", crate::helper::SLOW_TIMEOUT).await
+    {
+        eprintln!("[closehandles] {}", e);
+    }
 }
 
 async fn close_singleton_and_hold_mutex(app: &AppHandle, state: &AppState) {
-    if cfg!(windows) {
-        start_mutex_holder(app, state).await;
+    if !cfg!(windows) {
+        return;
     }
+    // ensure() awaits the daemon's READY, which it only sends once it owns the
+    // mutex -- so this still guarantees the mutex is held before we launch.
+    start_mutex_holder(app, state).await;
     close_singleton_handles_only(app, state).await;
 }
 
@@ -887,10 +833,14 @@ async fn spawn_roblox_direct(roblox_uri: &str, live_version: Option<&str>) -> Op
 
 // ---- watch loop ----
 // One shared poll covers every watched account instead of a spawn per
-// account per tick. MISS_THRESHOLD * POLL_INTERVAL gives ~6s worst-case
-// close-detection latency while tolerating transient misses under load.
-const MISS_THRESHOLD: u32 = 3;
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
+// account per tick. MISS_THRESHOLD * POLL_INTERVAL gives ~2s worst-case
+// close-detection latency while still tolerating a single transient miss.
+// The PID readings come from the resident RobloxNative "watch" helper doing
+// real process enumeration (not flaky tasklist parsing), so one miss of
+// tolerance is enough -- faster than the old 3x2s=6s, so the card updates
+// and the watcher shuts down within ~2s of Roblox actually closing.
+const MISS_THRESHOLD: u32 = 2;
+pub const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const LAUNCH_DELAY_MS: i64 = 15_000;
 
 fn now_ms() -> i64 {
@@ -923,63 +873,26 @@ fn stop_watch_poll_if_idle(state: &AppState) {
     }
 }
 
-// Resident "watch" helper process (see RobloxNative.cs), started once per
-// watch session instead of spawning fresh on every poll tick.
+// Turns on the helper's PID broadcast thread; it pushes "E|PIDS|..." events
+// which helper.rs drops straight into watch_pid_cache. Idempotent -- asking
+// twice just re-arms the same thread inside the same process.
 async fn ensure_pid_watcher(app: &AppHandle, state: &AppState) {
-    // Held for the whole spawn attempt so two racing callers can't both
-    // pass the is_some() check while the first is still mid-spawn.
-    let _guard = state.watch_pid_spawn_lock.lock().await;
-    if state.watch_pid_child.lock().unwrap().is_some() {
-        return;
-    }
-    let Some(exe) = ensure_native_helper(app, state).await else {
-        return;
-    };
-    let mut cmd = Command::new(&exe);
-    cmd.args(["watch", &POLL_INTERVAL.as_millis().to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    hide_window(&mut cmd);
-    let Ok(mut child) = cmd.spawn() else {
-        return;
-    };
-    let my_gen = {
-        let mut gen = state.watch_pid_generation.lock().unwrap();
-        *gen += 1;
-        *gen
-    };
-    if let Some(stdout) = child.stdout.take() {
-        let app2 = app.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let Some(rest) = line.trim().strip_prefix("PIDS:") else {
-                    continue;
-                };
-                let set: std::collections::HashSet<u32> = rest.split(',').filter_map(|s| s.trim().parse::<u32>().ok()).collect();
-                let st = app2.state::<AppState>();
-                *st.watch_pid_cache.lock().unwrap() = Some(set);
-            }
-            // Clear the handle once the watcher's stdout closes, so a dead
-            // child can't block a respawn -- unless a newer watcher has
-            // already taken over, in which case this is stale.
-            let st = app2.state::<AppState>();
-            if *st.watch_pid_generation.lock().unwrap() == my_gen {
-                *st.watch_pid_child.lock().unwrap() = None;
-                *st.watch_pid_cache.lock().unwrap() = None;
-            }
-        });
-    }
-    *state.watch_pid_child.lock().unwrap() = Some(child);
+    let _ = crate::helper::call(
+        app,
+        state,
+        &format!("watch|{}", POLL_INTERVAL.as_millis()),
+        crate::helper::DEFAULT_TIMEOUT,
+    )
+    .await;
 }
 
 fn stop_pid_watcher(state: &AppState) {
-    *state.watch_pid_generation.lock().unwrap() += 1;
-    if let Some(mut child) = state.watch_pid_child.lock().unwrap().take() {
-        let _ = child.start_kill();
-    }
     *state.watch_pid_cache.lock().unwrap() = None;
+    let app = state.app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let st = app.state::<AppState>();
+        let _ = crate::helper::call(&app, &st, "watch|0", crate::helper::DEFAULT_TIMEOUT).await;
+    });
 }
 
 // The watcher's last report if running, else a one-off spawn.
@@ -988,6 +901,39 @@ async fn cached_or_spawn_pids(app: &AppHandle, state: &AppState) -> Option<std::
         return Some(pids);
     }
     native_pids(app, state).await
+}
+
+// Polls for whichever new RobloxPlayerBeta.exe PID appears after the
+// URI-handler fallback (do_launch has no PID back from that path the way
+// spawn_roblox_direct gives one). Scoped to a fresh `pids_before` snapshot
+// taken right before the fallback fires and to PIDs no other account already
+// claims, so it can't steal an unrelated, already-running Roblox window --
+// unlike a blind "first available orphan" grab, which would happily adopt
+// any pre-existing untracked window (one the user opened outside
+// MultiRoblox entirely) the moment this account's watch tick came up empty.
+async fn wait_for_new_roblox_pid(
+    app: &AppHandle,
+    state: &AppState,
+    pids_before: &std::collections::HashSet<u32>,
+    timeout: Duration,
+) -> Option<u32> {
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(alive) = native_pids(app, state).await {
+            let claimed: std::collections::HashSet<u32> =
+                state.account_pids.lock().unwrap().values().copied().collect();
+            if let Some(new_pid) = alive
+                .iter()
+                .find(|p| !pids_before.contains(p) && !claimed.contains(p))
+            {
+                return Some(*new_pid);
+            }
+        }
+        if started.elapsed() >= timeout {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 }
 
 fn start_watch_poll(app: &AppHandle, state_handle: tauri::AppHandle) {
@@ -1084,16 +1030,23 @@ async fn watch_tick(app: &AppHandle) {
             Some(p) => alive_pids.contains(&p),
             None => any_running,
         };
-        if let Some(_p) = pid {
-            if !running && !orphans.is_empty() {
-                let adopted = orphans.remove(0);
-                state
-                    .account_pids
-                    .lock()
-                    .unwrap()
-                    .insert(account_id.clone(), adopted);
-                running = true;
-            }
+        // Adopt an unclaimed PID whenever we don't have one at all (not just
+        // when a previously-tracked one died). do_launch's own post-fallback
+        // poll (wait_for_new_roblox_pid) is now the primary way a
+        // URI-handler-launched account gets attributed a real PID right
+        // away; this is just the secondary net for the rare case where
+        // Roblox took longer than that poll's window to actually start.
+        // Same "adopt any unclaimed orphan" ambiguity the original
+        // died-PID reassignment already accepted -- rare and last-resort
+        // now, not the primary mechanism.
+        if !orphans.is_empty() && (pid.is_none() || !running) {
+            let adopted = orphans.remove(0);
+            state
+                .account_pids
+                .lock()
+                .unwrap()
+                .insert(account_id.clone(), adopted);
+            running = true;
         }
         if !running {
             let misses = {
@@ -1138,9 +1091,10 @@ async fn watch_tick(app: &AppHandle) {
         state.account_pids.lock().unwrap().remove(account_id);
         clear_manual_priority(&state, account_id);
         let _ = app.emit("roblox:closed", account_id);
-        apply_priority_policy(&state).await;
+        let close_settings = crate::settings::load_settings();
+        apply_priority_policy(&state, &close_settings).await;
 
-        let auto_relaunch = crate::settings::load_settings().get("autoRelaunch").and_then(|v| v.as_bool()).unwrap_or(false);
+        let auto_relaunch = close_settings.get("autoRelaunch").and_then(|v| v.as_bool()).unwrap_or(false);
         if auto_relaunch {
             let cookie = acct.get("cookie").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let target = acct.get("gameTarget").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1170,12 +1124,57 @@ async fn watch_tick(app: &AppHandle) {
         }
     }
 
-    let _ = app.emit("roblox:count", alive_pids.len());
+    // Same definition as count_roblox_processes, and computed after the closed
+    // accounts above were dropped from account_pids, so the pushed count and
+    // the polled one can't disagree.
+    let _ = app.emit("roblox:count", owned_running_count(&state, &alive_pids));
     stop_watch_poll_if_idle(&state);
 }
 
 // ---- launch ----
 const LAUNCH_STAGGER_MS: i64 = 4_000;
+
+// A launch can legitimately take ~30s -- staggering, CSRF, ticket retries with
+// backoff, then up to three spawn attempts -- so it needs a way out. The flag
+// is registered before the launch queues on launch_lock, so a launch that
+// hasn't started yet can be abandoned too.
+pub fn register_launch(state: &AppState, account_id: &str) -> std::sync::Arc<AtomicBool> {
+    let flag = std::sync::Arc::new(AtomicBool::new(false));
+    state
+        .launch_cancel
+        .lock()
+        .unwrap()
+        .insert(account_id.to_string(), flag.clone());
+    flag
+}
+
+pub fn finish_launch(state: &AppState, account_id: &str) {
+    state.launch_cancel.lock().unwrap().remove(account_id);
+}
+
+pub fn cancel_launch(state: &AppState, account_id: &str) -> bool {
+    match state.launch_cancel.lock().unwrap().get(account_id) {
+        Some(flag) => {
+            flag.store(true, Ordering::SeqCst);
+            true
+        }
+        None => false, // nothing in flight for this account
+    }
+}
+
+fn launch_cancelled(state: &AppState, account_id: &str) -> bool {
+    state
+        .launch_cancel
+        .lock()
+        .unwrap()
+        .get(account_id)
+        .map(|f| f.load(Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
+fn cancelled_result() -> Value {
+    serde_json::json!({ "success": false, "cancelled": true, "error": "Launch cancelled" })
+}
 
 pub async fn do_launch(
     app: &AppHandle,
@@ -1185,6 +1184,9 @@ pub async fn do_launch(
     target: &str,
 ) -> Value {
     close_singleton_and_hold_mutex(app, state).await;
+    if launch_cancelled(state, account_id) {
+        return cancelled_result();
+    }
 
     let since_last = now_ms() - *state.last_launch_ts.lock().unwrap();
     if *state.last_launch_ts.lock().unwrap() > 0 && since_last < LAUNCH_STAGGER_MS {
@@ -1192,6 +1194,9 @@ pub async fn do_launch(
             (LAUNCH_STAGGER_MS - since_last) as u64,
         ))
         .await;
+    }
+    if launch_cancelled(state, account_id) {
+        return cancelled_result();
     }
 
     let csrf_token = crate::roblox_api::get_csrf_token(state, cookie).await;
@@ -1230,6 +1235,11 @@ pub async fn do_launch(
         return serde_json::json!({ "success": false, "error": format!("Failed to get auth ticket: {}", ticket_result.error.unwrap_or_default()) });
     }
     let ticket = ticket_result.ticket.unwrap_or_default();
+    // Last point before we start spawning processes -- after this the client
+    // is Roblox's to manage, and cancelling would mean killing it instead.
+    if launch_cancelled(state, account_id) {
+        return cancelled_result();
+    }
 
     let t = target.trim();
     let mut launcher_url = String::new();
@@ -1375,14 +1385,23 @@ pub async fn do_launch(
     // default, or the locked channel above) -- a stale cached version-folder
     // or a different channel a bootstrapper pulled down shouldn't get
     // force-launched just because it's the newest thing physically on disk.
-    // Unknown (network failure) doesn't block launch, since that's Roblox's
-    // API being unreachable, not a real mismatch.
-    let live_version = crate::roblox_api::get_roblox_version(
-        state,
-        if lock_channel { Some(channel.as_str()) } else { None },
-    )
-    .await
-    .ok();
+    // Unknown (network failure or timeout) doesn't block launch, since
+    // that's Roblox's API being unreachable, not a real mismatch. Every
+    // other network call in this file is timeout-wrapped except this one
+    // was -- an unresponsive (not just erroring) clientsettingscdn/
+    // setup.rbxcdn.com would otherwise hang the Launch button forever with
+    // no recovery, since this runs on every single launch.
+    let live_version = if lock_channel {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            crate::roblox_api::get_roblox_version(state, Some(channel.as_str())),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+    } else {
+        None
+    };
 
     // Falling through to the OS URI handler on spawn failure is what
     // triggers Roblox's own "reinstall?" prompt -- usually just a launch
@@ -1393,6 +1412,11 @@ pub async fn do_launch(
     for attempt in 0..3 {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_secs(3)).await;
+            // The retry backoff is the longest stretch of this whole path;
+            // bail out here rather than making the user wait it out.
+            if launch_cancelled(state, account_id) {
+                return cancelled_result();
+            }
         }
         spawned_pid = spawn_roblox_direct(&roblox_uri, live_version.as_deref()).await;
         if spawned_pid.is_some() {
@@ -1408,11 +1432,29 @@ pub async fn do_launch(
                 .insert(account_id.to_string(), pid);
         }
         None => {
+            // Snapshot alive PIDs before handing off to the OS URI handler,
+            // then poll for whichever new one shows up -- gives this
+            // fallback-launched account a real, precisely-attributed PID
+            // immediately, instead of leaving it untracked for the shared
+            // watch loop's much coarser adoption to (maybe, eventually)
+            // pick up.
+            let pids_before = cached_or_spawn_pids(app, state)
+                .await
+                .unwrap_or_default();
             let _ = tauri_plugin_opener::open_url(&roblox_uri, None::<&str>);
+            if let Some(pid) =
+                wait_for_new_roblox_pid(app, state, &pids_before, Duration::from_secs(10)).await
+            {
+                state
+                    .account_pids
+                    .lock()
+                    .unwrap()
+                    .insert(account_id.to_string(), pid);
+            }
         }
     }
 
-    apply_priority_policy(state).await;
+    apply_priority_policy(state, &launch_settings).await;
 
     *state.last_launch_ts.lock().unwrap() = now_ms();
     crate::roblox_api::invalidate_ticket(state, &cookie);
@@ -1453,7 +1495,7 @@ pub async fn do_launch(
 
     watch_roblox(app, account_id).await;
 
-    if let Some(vol) = crate::settings::load_settings()
+    if let Some(vol) = launch_settings
         .get("masterVolume")
         .and_then(|v| v.as_f64())
     {
