@@ -1994,7 +1994,7 @@ async function mixInit() {
 // FPS
 function mixFpsInput(v) {
   v = parseInt(v, 10);
-  const snapped = v >= 9999 ? 9999 : Math.round(v / 10) * 10;
+  const snapped = v >= 9999 ? 9999 : Math.round(v / 5) * 5;
   const sl = document.getElementById('mix-fps');
   if (sl.value != snapped) sl.value = snapped;
   document.getElementById('mix-fps-val').textContent = snapped;
