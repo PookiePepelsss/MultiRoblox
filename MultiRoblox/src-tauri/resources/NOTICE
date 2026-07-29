@@ -92,11 +92,10 @@ risk.
 7. Third-party components
 --------------------------
 
-This software incorporates third-party open-source components, each subject
-to its own license and copyright. They are listed in THIRD-PARTY-NOTICES.txt,
-which is distributed with the software. Nothing in the LICENSE or in this
-notice alters, restricts, or supersedes the terms of those third-party
-licenses.
+This software incorporates third-party open-source components, each of which
+remains subject to its own license and copyright, most commonly the MIT and
+Apache-2.0 licenses. Nothing in the LICENSE or in this notice alters,
+restricts, or supersedes the terms of those third-party licenses.
 
 
 8. Contributions
