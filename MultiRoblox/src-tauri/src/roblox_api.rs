@@ -489,14 +489,22 @@ pub async fn resolve_share_link(
     }
 }
 
-fn extract_place_link(body: &str) -> Option<(String, String)> {
-    let re_pid = regex::Regex::new(r#""placeId"\s*:\s*(\d+)"#).unwrap();
-    let re_lc = regex::Regex::new(
+// Compiled once; the patterns are constants and are exercised by the tests
+// below, so the unwraps can only fire on first use.
+static PLACE_ID_JSON_RE: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r#""placeId"\s*:\s*(\d+)"#).unwrap());
+static LINK_CODE_JSON_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+    regex::Regex::new(
         r#""(?:linkCode|privateServerLinkCode|accessCode|linkcode)"\s*:\s*"([A-Za-z0-9_\-]+)""#,
     )
-    .unwrap();
-    let pid = re_pid.captures(body)?.get(1)?.as_str().to_string();
-    let lc = re_lc.captures(body)?.get(1)?.as_str().to_string();
+    .unwrap()
+});
+static ACCESS_CODE_QUERY_RE: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"[?&]accessCode=([^&]+)").unwrap());
+
+fn extract_place_link(body: &str) -> Option<(String, String)> {
+    let pid = PLACE_ID_JSON_RE.captures(body)?.get(1)?.as_str().to_string();
+    let lc = LINK_CODE_JSON_RE.captures(body)?.get(1)?.as_str().to_string();
     Some((pid, lc))
 }
 
@@ -527,6 +535,46 @@ async fn post_raw(
         }
         Err(_) => (0, reqwest::header::HeaderMap::new(), String::new()),
     }
+}
+
+// userPresenceType from Roblox: 0 Offline, 1 Online (on the site/app, not in
+// a game), 2 InGame, 3 InStudio. Only presence type 2 means "actually in a
+// game" -- the account card's blue-vs-green distinction rides on that, not on
+// whether the process itself is running (that part is already known locally
+// the moment do_launch spawns it).
+pub async fn get_in_game_user_ids(
+    state: &AppState,
+    cookie: &str,
+    user_ids: &[i64],
+) -> Result<Vec<i64>, String> {
+    if user_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let csrf = get_csrf_token(state, cookie)
+        .await
+        .ok_or_else(|| "could not get CSRF token".to_string())?;
+    let body = serde_json::json!({ "userIds": user_ids }).to_string();
+    let (status, _headers, resp_body) = post_raw(
+        state,
+        "https://presence.roblox.com/v1/presence/users",
+        cookie,
+        &csrf,
+        &body,
+    )
+    .await;
+    if status != 200 {
+        return Err(format!("presence HTTP {}", status));
+    }
+    let json: Value = serde_json::from_str(&resp_body).map_err(|e| e.to_string())?;
+    let presences = json.get("userPresences").and_then(|v| v.as_array());
+    let Some(presences) = presences else {
+        return Err("unexpected presence response shape".into());
+    };
+    Ok(presences
+        .iter()
+        .filter(|p| p.get("userPresenceType").and_then(|v| v.as_i64()) == Some(2))
+        .filter_map(|p| p.get("userId").and_then(|v| v.as_i64()))
+        .collect())
 }
 
 pub async fn get_access_code(
@@ -590,8 +638,8 @@ pub async fn get_access_code(
         .headers()
         .get("location")
         .and_then(|v| v.to_str().ok())?;
-    let re = regex::Regex::new(r"[?&]accessCode=([^&]+)").unwrap();
-    re.captures(loc)
+    ACCESS_CODE_QUERY_RE
+        .captures(loc)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
 }

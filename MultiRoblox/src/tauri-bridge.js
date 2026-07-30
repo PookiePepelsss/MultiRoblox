@@ -67,6 +67,7 @@
 
     onChromeProgress: (cb) => listen('chrome:download-progress', (e) => cb(e.payload)),
     onRobloxClosed: (cb) => listen('roblox:closed', (e) => cb(e.payload)),
+    onRobloxStarted: (cb) => listen('roblox:started', (e) => cb(e.payload)),
     onRobloxCount: (cb) => listen('roblox:count', (e) => cb(e.payload)),
     onLogEntry: (cb) => listen('log:entry', (e) => cb(e.payload)),
 
@@ -77,6 +78,7 @@
     // exempt from this, which is why this needs a Rust-side detour).
     // Returns { ok, status, data } to mirror the fetch()+r.json() shape callers used.
     robloxGet: (url) => invoke('roblox_get_json', { url }),
+    robloxInGameIds: (cookie, userIds) => invoke('roblox_in_game_ids', { cookie, userIds }),
     // api.altgen.me sends no Access-Control-Allow-Origin either -- same CORS
     // gap as robloxGet above. Returns { status, data } (data is the API's own
     // { success, message/error, data } JSON body).

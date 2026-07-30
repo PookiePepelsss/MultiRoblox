@@ -185,6 +185,19 @@ impl OutputTimeout for Command {
     }
 }
 
+// Compiled once rather than per call. do_launch alone rebuilt three of these
+// on every single launch; the patterns are constants so the unwraps here can
+// only ever fire on the first use, never mid-launch.
+static TASKLIST_PID_RE: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r#""RobloxPlayerBeta\.exe","(\d+)""#).unwrap());
+static JOB_SHORTHAND_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+    regex::Regex::new(r"^(\d+)[,:]\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$").unwrap()
+});
+static PLACE_ID_GAMES_RE: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"/games/(\d+)").unwrap());
+static PLACE_ID_ANY_RE: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"/(\d+)").unwrap());
+
 // ---- singleton mutex ----
 // The one helper process owns ROBLOX_singletonMutex on a dedicated thread for
 // the whole session (see helper.rs / MutexHolder in RobloxNative.cs). Nothing
@@ -370,9 +383,9 @@ async fn native_pids(app: &AppHandle, state: &AppState) -> Option<std::collectio
         ),
         Err(_) => {
             let out = tasklist("RobloxPlayerBeta.exe").await?;
-            let re = regex::Regex::new(r#""RobloxPlayerBeta\.exe","(\d+)""#).unwrap();
             Some(
-                re.captures_iter(&out)
+                TASKLIST_PID_RE
+                    .captures_iter(&out)
                     .filter_map(|c| c[1].parse::<u32>().ok())
                     .collect(),
             )
@@ -1132,7 +1145,13 @@ async fn watch_tick(app: &AppHandle) {
 }
 
 // ---- launch ----
-const LAUNCH_STAGGER_MS: i64 = 4_000;
+// Minimum gap between one launch finishing and the next one spawning. Launches
+// are already serialized by launch_lock, so this is extra spacing on top of
+// that -- it keeps clients from starting close enough together to contend for
+// CPU/disk or to hammer the auth-ticket endpoint. Because the lock means the
+// next launch reaches the check almost immediately, in practice this sleeps
+// very nearly its full value on every launch after the first.
+const LAUNCH_STAGGER_MS: i64 = 2_000;
 
 // A launch can legitimately take ~30s -- staggering, CSRF, ticket retries with
 // backoff, then up to three spawn attempts -- so it needs a way out. The flag
@@ -1245,11 +1264,9 @@ pub async fn do_launch(
     let mut launcher_url = String::new();
 
     // "placeId:jobId" or "placeId,jobId" shorthand for joining one specific
-    // running server instance.
-    let job_shorthand_re = regex::Regex::new(r"^(\d+)[,:]\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$").unwrap();
-
+    // running server instance. (Pattern lives in JOB_SHORTHAND_RE above.)
     if !t.is_empty() {
-        if let Some(caps) = job_shorthand_re.captures(t) {
+        if let Some(caps) = JOB_SHORTHAND_RE.captures(t) {
             launcher_url = format!(
                 "https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGameJob&placeId={}&gameId={}&isPlayTogetherGame=false",
                 &caps[1], &caps[2]
@@ -1284,12 +1301,10 @@ pub async fn do_launch(
                         .or_else(|| query.get("gameInstanceId"))
                         .or_else(|| query.get("serverJobId"))
                         .cloned();
-                    let place_id_re = regex::Regex::new(r"/games/(\d+)").unwrap();
-                    let place_id_re2 = regex::Regex::new(r"/(\d+)").unwrap();
                     let path = parsed_url.path();
-                    let place_id = place_id_re
+                    let place_id = PLACE_ID_GAMES_RE
                         .captures(path)
-                        .or_else(|| place_id_re2.captures(path))
+                        .or_else(|| PLACE_ID_ANY_RE.captures(path))
                         .map(|c| c[1].to_string())
                         .or_else(|| query.get("placeId").cloned());
 
@@ -1430,6 +1445,13 @@ pub async fn do_launch(
                 .lock()
                 .unwrap()
                 .insert(account_id.to_string(), pid);
+            // Fired the instant the process exists, not after the trailing
+            // priority/bookkeeping work below or the JSON round-trip back to
+            // the caller -- that gap (small on its own, but stacked behind
+            // CSRF/ticket fetches and the inter-launch stagger for every
+            // account after the first) is what made the UI's "launched"
+            // color feel like it lagged the real state of the world.
+            let _ = app.emit("roblox:started", account_id);
         }
         None => {
             // Snapshot alive PIDs before handing off to the OS URI handler,
@@ -1450,6 +1472,7 @@ pub async fn do_launch(
                     .lock()
                     .unwrap()
                     .insert(account_id.to_string(), pid);
+                let _ = app.emit("roblox:started", account_id);
             }
         }
     }

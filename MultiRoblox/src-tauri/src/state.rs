@@ -48,9 +48,20 @@ impl AppState {
     pub fn new(app_handle: AppHandle) -> Self {
         Self {
             app_handle,
-            http: reqwest::Client::builder().build().expect("reqwest client"),
+            // connect_timeout only -- deliberately NOT a whole-request
+            // timeout. A host that blackholes packets (firewall drop, dead
+            // DNS) otherwise leaves a connect attempt hanging indefinitely,
+            // and callers that aren't individually timeout-wrapped just stop.
+            // A request timeout would cap the whole exchange including the
+            // body, which would break the Chrome download in login.rs -- it
+            // streams a several-hundred-MB zip through this same client.
+            http: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .build()
+                .expect("reqwest client"),
             http_no_redirect: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(std::time::Duration::from_secs(15))
                 .build()
                 .expect("reqwest client (no redirect)"),
             session_pass: Mutex::new(None),

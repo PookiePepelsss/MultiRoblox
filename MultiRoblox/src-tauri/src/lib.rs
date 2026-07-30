@@ -135,6 +135,7 @@ pub fn run() {
             commands::roblox_set_account_priority,
             commands::roblox_get_game_name,
             commands::roblox_get_json,
+            commands::roblox_in_game_ids,
             commands::altgen_generate,
             commands::roblox_launch,
             commands::roblox_launch_cancel,

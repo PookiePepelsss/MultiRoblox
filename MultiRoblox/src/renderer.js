@@ -136,7 +136,7 @@ async function submitEnc() {
       if (!val) { _encErr('Please enter your encryption key.'); action.disabled = false; return; }
       const r = await api.encUnlock(val);
       if (!r || !r.ok) { _encErr('Wrong key. Please try again.'); logEntry('warn', 'enc', 'Failed encryption unlock attempt (wrong key)'); action.disabled = false; inp.value = ''; inp.focus(); return; }
-      logEntry('ok', 'enc', 'Encryption key accepted - accounts unlocked');
+      logEntry('ok', 'enc', 'Encryption key accepted, accounts unlocked');
     }
     closeModal('m-enc');
     await continueInit();
@@ -221,25 +221,34 @@ async function continueInit() {
   // main pushes the count off the watch tick; the local poll backs off below
   api.onRobloxCount(n => { _lastCountPushAt = Date.now(); _mixRunning = n; setRunningBadges(n); });
 
+  // Fires the moment the process actually exists (see native.rs do_launch),
+  // instead of waiting on the whole launch call -- CSRF fetch, auth ticket,
+  // inter-launch stagger, trailing bookkeeping -- to resolve back to the
+  // caller. markLaunched() is idempotent, so the doLaunch() success path
+  // below calling it again once its own await resolves is harmless.
+  api.onRobloxStarted(id => markLaunched(id));
+
   api.onRobloxClosed(id => {
     _launchedIds.delete(id);
     const closedAcct = accounts.find(a => a.id === id);
     logEntry('info', 'close', `Roblox closed for ${closedAcct ? closedAcct.username : id}`, { accountId: id, username: closedAcct?.username || null, userId: closedAcct?.userId || null });
     const card = document.querySelector(`.card[data-id="${id}"]`);
-    if (card) card.classList.remove('is-live');
+    if (card) card.classList.remove('is-live', 'in-game');
     const dot = document.querySelector(`.card[data-id="${id}"] .card-dot`);
-    if (dot) { dot.classList.remove('launched'); dot.title = 'Not launched'; }
+    if (dot) { dot.classList.remove('launched', 'in-game'); dot.title = 'Not launched'; }
     refreshPkgAvatarStatus();
     pollRunningCount();
+    stopPresencePollIfIdle();
   });
 
   api.onAllRobloxClosed(() => {
     logEntry('warn', 'close', 'All Roblox instances closed');
     _launchedIds.clear();
-    document.querySelectorAll('.card.is-live').forEach(c => c.classList.remove('is-live'));
-    document.querySelectorAll('.card-dot.launched').forEach(d => { d.classList.remove('launched'); d.title = 'Not launched'; });
+    document.querySelectorAll('.card.is-live').forEach(c => c.classList.remove('is-live', 'in-game'));
+    document.querySelectorAll('.card-dot.launched').forEach(d => { d.classList.remove('launched', 'in-game'); d.title = 'Not launched'; });
     refreshPkgAvatarStatus();
     pollRunningCount();
+    stopPresencePollIfIdle();
     if (document.getElementById('page-mixer')?.classList.contains('active')) mixRefreshRunning();
   });
 
@@ -473,6 +482,22 @@ function toggleAutoRelaunch() {
   api.saveSettings({ autoRelaunch: on });
   toast(on ? 'Relaunch on disconnect on' : 'Relaunch on disconnect off', on ? 'ok' : 'err');
 }
+// Releasing/re-acquiring the mutex happens inside the helper and isn't
+// instant, so re-read the real state afterwards instead of assuming the badge
+// can be derived from the checkbox.
+async function toggleMultiInstance() {
+  const el = document.getElementById('set-multiinstance');
+  const on = el.checked;
+  el.disabled = true;
+  settings.multiInstance = on;
+  try {
+    await api.saveSettings({ multiInstance: on });
+    toast(on ? 'Multi-instance on' : 'Multi-instance off, Roblox will allow one client', on ? 'ok' : 'err');
+  } finally {
+    el.disabled = false;
+  }
+  await refreshMultiStatus();
+}
 function toggleLowPriority() {
   const el = document.getElementById('set-lowpriority');
   const on = el.checked;
@@ -526,6 +551,38 @@ function refreshAllSliderFills() {
   document.querySelectorAll('.fps-slider').forEach(updateSliderFill);
 }
 
+// Segments aren't equal width, so the pill's left/width are computed in
+// real pixels from the active button's own rect rather than assumed from
+// index -- this is also what lets one CSS rule work for both tab bars
+// (Settings' 6 segments and Charts' 3) without hardcoding either count.
+function positionTabSlider(barEl) {
+  if (!barEl) return;
+  let slider = barEl.querySelector('.tab-slider');
+  const isNew = !slider;
+  if (isNew) {
+    slider = document.createElement('div');
+    slider.className = 'tab-slider';
+    barEl.insertBefore(slider, barEl.firstChild);
+  }
+  const active = barEl.querySelector('.tab-btn.active');
+  if (!active) { slider.style.opacity = '0'; return; }
+  const barRect = barEl.getBoundingClientRect();
+  const btnRect = active.getBoundingClientRect();
+  if (isNew) slider.style.transition = 'none';
+  slider.style.left = (btnRect.left - barRect.left) + 'px';
+  slider.style.width = btnRect.width + 'px';
+  slider.style.opacity = '1';
+  if (isNew) {
+    void slider.offsetWidth; // force layout so the disabled transition applies before restoring it
+    slider.style.transition = '';
+  }
+}
+window.addEventListener('resize', () => {
+  document.querySelectorAll('.tab-bar').forEach(bar => {
+    if (bar.querySelector('.tab-btn.active')) positionTabSlider(bar);
+  });
+});
+
 function settingsTab(tab) {
   ['general','performance','roblox','privacy','themes','sounds'].forEach(t => {
     const panel = document.getElementById('stab-panel-' + t);
@@ -536,6 +593,7 @@ function settingsTab(tab) {
   if (tab === 'sounds') typeof soundRenderPage === 'function' && soundRenderPage();
   if (tab === 'performance') renderEngineInit();
   refreshAllSliderFills();
+  positionTabSlider(document.getElementById('stab-general')?.closest('.tab-bar'));
 }
 
 function goTo(p) {
@@ -547,9 +605,15 @@ function goTo(p) {
   if (p === 'settings') {
     document.getElementById('stat-count').textContent = accounts.length;
     refreshMultiStatus();
+    // Covers landing here without ever clicking a tab -- the default-active
+    // tab still needs the pill positioned under it at least once.
+    positionTabSlider(document.getElementById('stab-general')?.closest('.tab-bar'));
   }
   if (p === 'logs') renderLogs();
-  if (p === 'charts' && !chartsLoaded) loadCharts();
+  if (p === 'charts') {
+    if (!chartsLoaded) loadCharts();
+    positionTabSlider(document.getElementById('ctab-popular')?.closest('.tab-bar'));
+  }
   if (p === 'packages') renderPackages();
   if (p === 'mixer') mixInit();
   if (p === 'tracking') renderTrackingPage();
@@ -567,6 +631,49 @@ function markLaunched(id) {
 
   }
   refreshPkgAvatarStatus();
+  ensurePresencePoll();
+}
+
+function markInGame(id, inGame) {
+  const card = document.querySelector(`.card[data-id="${id}"]`);
+  if (card) card.classList.toggle('in-game', inGame);
+  const dot = card ? card.querySelector('.card-dot') : null;
+  if (dot) dot.classList.toggle('in-game', inGame);
+}
+
+// Blue-vs-green needs Roblox's own presence data, which the process being up
+// (do_launch's PID) can't tell you -- a client can be fully launched and
+// sitting on the home menu for a while before it ever joins a place. Polled
+// rather than pushed since nothing local changes state when a game is
+// joined; the interval only runs while at least one account is launched.
+let _presencePollTimer = null;
+const PRESENCE_POLL_MS = 12000;
+function ensurePresencePoll() {
+  if (_presencePollTimer || _launchedIds.size === 0) return;
+  _presencePollTimer = setInterval(pollPresence, PRESENCE_POLL_MS);
+  pollPresence();
+}
+function stopPresencePollIfIdle() {
+  if (_launchedIds.size === 0 && _presencePollTimer) {
+    clearInterval(_presencePollTimer);
+    _presencePollTimer = null;
+  }
+}
+async function pollPresence() {
+  const launched = accounts.filter(a => _launchedIds.has(a.id) && a.userId);
+  if (!launched.length) { stopPresencePollIfIdle(); return; }
+  const cookie = launched.find(a => a.cookie)?.cookie;
+  if (!cookie) return;
+  const userIds = [...new Set(launched.map(a => a.userId))];
+  let inGameIds;
+  try {
+    inGameIds = await api.robloxInGameIds(cookie, userIds);
+  } catch {
+    return; // transient failure -- leave existing indicators as they were
+  }
+  if (!Array.isArray(inGameIds)) return;
+  const inGameSet = new Set(inGameIds);
+  launched.forEach(a => markInGame(a.id, inGameSet.has(a.userId)));
 }
 
 async function killOne(id) {
@@ -1229,7 +1336,7 @@ async function addByCookie() {
   btn.disabled = false;
   btn.innerHTML = '<span class="material-icons-round" style="font-size:15px">check</span>Add Account';
   if (!res.ok) {
-    setStatus('login-status', 'err', '<span class="material-icons-round">error_outline</span>' + (res.reason || 'Invalid cookie - make sure you copied the full .ROBLOSECURITY value'));
+    setStatus('login-status', 'err', '<span class="material-icons-round">error_outline</span>' + (res.reason || 'Invalid cookie: make sure you copied the full .ROBLOSECURITY value'));
     return;
   }
   await finishLogin({ success: true, cookie, username: res.username, userId: res.userId });
@@ -1254,17 +1361,30 @@ async function finishLogin(res) {
 
 function openEdit(id) {
   editAcc = accounts.find(a => a.id === id); if (!editAcc) return;
-  document.getElementById('edit-title').textContent = 'Edit - ' + (editAcc.nickname || editAcc.username);
+  document.getElementById('edit-title').textContent = 'Edit account';
+  document.getElementById('edit-head-name').textContent = editAcc.username || 'Unknown';
+  document.getElementById('edit-head-meta').textContent =
+    (editAcc.username ? '@' + editAcc.username : '') +
+    (editAcc.userId ? (editAcc.username ? ' · ' : '') + 'ID ' + editAcc.userId : '');
+  // Letter fallback first, then swap in the cached headshot if we have one.
+  const av = document.getElementById('edit-av');
+  av.innerHTML = esc((editAcc.username || '?')[0].toUpperCase());
+  if (editAcc.userId && _avatarCache[editAcc.userId]) {
+    av.innerHTML = '<img src="' + esc(_avatarCache[editAcc.userId]) + '" alt=""/>';
+  }
   document.getElementById('in-nickname').value = editAcc.nickname || '';
+  document.getElementById('in-description').value = editAcc.description || '';
   document.getElementById('in-target').value = editAcc.gameTarget || '';
   openModal('m-edit');
-  setTimeout(() => document.getElementById('in-target').focus(), 220);
+  setTimeout(() => document.getElementById('in-nickname').focus(), 220);
 }
+
 async function saveEdit() {
   if (!editAcc) return;
   const target = document.getElementById('in-target').value.trim();
   const nickname = document.getElementById('in-nickname').value.trim();
-  const updated = await api.updateAccount(editAcc.id, { gameTarget: target, nickname });
+  const description = document.getElementById('in-description').value.trim();
+  const updated = await api.updateAccount(editAcc.id, { gameTarget: target, nickname, description });
   if (updated) {
     const idx = accounts.findIndex(a => a.id === editAcc.id);
     if (idx !== -1) {
@@ -1421,6 +1541,7 @@ function renderPackages() {
     return `
     <div class="pkg-card" data-id="${p.id}" style="animation-delay:${i * 18}ms">
       <div class="pkg-card-top">
+        <div class="sr-icon"><span class="material-icons-round">groups</span></div>
         <div class="pkg-card-info">
           <div class="pkg-name">${esc(p.name)}</div>
           <div class="pkg-meta">${members.length} account${members.length !== 1 ? 's' : ''}</div>
@@ -1443,7 +1564,7 @@ function renderPackages() {
             onkeydown="if(event.key==='Enter'){this.blur();launchPackage('${p.id}');}"/>
         </div>
         <button class="btn btn-launch pkg-launch-btn" onclick="launchPackage('${p.id}')" ${members.length ? '' : 'disabled'}>
-          Launch All
+          Start All
         </button>
         <button class="btn btn-del pkg-kill-btn" onclick="killPackage('${p.id}')" title="Kill running instances in this group" ${members.some(m => _launchedIds.has(m.id)) ? '' : 'disabled'}>
           <span class="material-icons-round">power_settings_new</span>
@@ -1581,7 +1702,7 @@ async function launchPackage(id) {
     }
   }));
 
-  if (btn) { btn.disabled = false; btn.innerHTML = 'Launch All'; delete btn.dataset.busy; }
+  if (btn) { btn.disabled = false; btn.innerHTML = 'Start All'; delete btn.dataset.busy; }
   if (killBtn && killBtn.dataset.busy !== '1') killBtn.disabled = !members.some(m => _launchedIds.has(m.id));
   toast('Launched ' + okCount + '/' + members.length + ' accounts in "' + p.name + '"', okCount === members.length ? 'ok' : 'err');
 }
@@ -1681,20 +1802,13 @@ function toast(msg, type) {
 // `false` alone -- this used to force it back on every time the Settings page
 // was opened, so the setting could never stay off.
 async function refreshMultiStatus() {
-  let s = await api.multiInstanceStatus();
-  if (!s.enabled && settings.multiInstance === undefined) {
-    await api.saveSettings({ multiInstance: true });
-    settings.multiInstance = true;
-    s = { enabled: true, active: s.active };
-  }
-  // The badge used to be hardcoded "Always On"; now that an explicit off is
-  // honoured it has to say what's actually true. "Starting" covers the brief
-  // window before the native helper has the mutex.
-  const badge = document.getElementById('stat-multi');
-  if (badge) {
-    badge.textContent = s.enabled ? (s.active ? 'Always On' : 'Starting') : 'Off';
-    badge.className = 'badge' + (s.enabled && s.active ? ' g' : ' muted');
-  }
+  const s = await api.multiInstanceStatus();
+  // Driven off the backend's own view rather than the local settings copy, so
+  // the switch can't sit out of sync with what the helper is actually doing.
+  // That side defaults to on now, so a fresh install shows the switch already
+  // enabled without needing the setting written out first.
+  const cb = document.getElementById('set-multiinstance');
+  if (cb) cb.checked = !!s.enabled;
 }
 
 document.querySelectorAll('.overlay').forEach(o => {
@@ -1718,7 +1832,10 @@ document.addEventListener('keydown', e => {
     closeAllCdd();
     const editEl = document.getElementById('m-edit');
     if (editEl.classList.contains('open')) {
-      if (document.activeElement !== document.getElementById('in-target') && document.activeElement !== document.getElementById('in-nickname')) closeModal('m-edit');
+      // Escape shouldn't discard the modal out from under someone mid-typing.
+      const typing = ['in-target', 'in-nickname', 'in-description']
+        .some(f => document.activeElement === document.getElementById(f));
+      if (!typing) closeModal('m-edit');
     } else document.querySelectorAll('.overlay.open').forEach(m => m.classList.remove('open'));
   }
   if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openLogin(); }
@@ -1744,6 +1861,7 @@ function switchChartTab(tab) {
   const s = document.getElementById('chart-search'); if (s) s.value = '';
   _searchMode = false;
   if (chartsLoaded) renderCharts(allCharts[tab] || [], false);
+  positionTabSlider(document.getElementById('ctab-' + tab).closest('.tab-bar'));
 }
 
 async function loadCharts() {
@@ -1832,14 +1950,17 @@ function renderCharts(games, searchMode) {
   grid.innerHTML = games.map((g, i) => {
     _chartGameMap[i] = g;
     const players = typeof g.playerCount === 'number' ? Number(g.playerCount).toLocaleString() + ' playing' : '';
-    const rankLabel = searchMode ? `<div class="chart-card-rank">Search result</div>` : `<div class="chart-card-rank">#${i + 1}</div>`;
+    // Rank only means something against the chart order; a search result list
+    // has no ranking to show, so the overlay badge is skipped there instead of
+    // labelling every card with the same "Search result" text.
+    const rankLabel = searchMode ? '' : `<div class="chart-card-rank">#${i + 1}</div>`;
     const thumb = g.thumbUrl
       ? `<img class="chart-card-thumb" src="${esc(g.thumbUrl)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=chart-card-thumb-ph><span class=material-icons-round>videogame_asset</span></div>'"/>`
       : `<div class="chart-card-thumb-ph"><span class="material-icons-round">videogame_asset</span></div>`;
     return `<div class="chart-card" style="animation-delay:${i * 12}ms" onclick="openGameModal(${i})" title="View game info">
       ${thumb}
+      ${rankLabel}
       <div class="chart-card-body">
-        ${rankLabel}
         <div class="chart-card-name">${esc(g.name || 'Unknown')}</div>
         ${players ? `<div class="chart-card-stat"><span class="material-icons-round">people</span>${players}</div>` : ''}
       </div>
@@ -2021,6 +2142,74 @@ async function mixFpsCommit() {
   toast('FPS cap: ' + v + ' (next launch)', 'ok');
 }
 
+// Swaps a value label for a number input in place. Commit paths (mixFpsCommit/
+// mixVolCommit) already overwrite the label's textContent with the new value,
+// which naturally removes the input from the DOM -- only the cancel path
+// (Escape) needs to manually restore what was there before.
+function startValueEdit(labelId, opts) {
+  const label = document.getElementById(labelId);
+  if (!label || label.querySelector('input')) return;
+  const { min, max, get, set } = opts;
+  const current = get();
+  const prevHTML = label.innerHTML;
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'fps-val-input';
+  input.min = min; input.max = max;
+  input.value = current;
+  label.textContent = '';
+  label.appendChild(input);
+  input.focus();
+  input.select();
+  input.addEventListener('click', e => e.stopPropagation());
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    if (commit) {
+      let v = parseInt(input.value, 10);
+      if (Number.isNaN(v)) v = current;
+      v = Math.max(min, Math.min(max, v));
+      set(v);
+    } else {
+      label.innerHTML = prevHTML;
+    }
+  };
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+function editFpsValue() {
+  const unl = document.getElementById('mix-fps-unl');
+  const sl = document.getElementById('mix-fps');
+  if (unl.checked) { unl.checked = false; sl.disabled = false; }
+  startValueEdit('mix-fps-val', {
+    min: 10, max: 9999,
+    get: () => parseInt(sl.value, 10) || 60,
+    set: (v) => {
+      sl.value = v >= 9999 ? 9999 : Math.round(v / 5) * 5;
+      updateSliderFill(sl);
+      mixFpsCommit();
+    }
+  });
+}
+
+function editVolValue() {
+  const sl = document.getElementById('mix-vol');
+  startValueEdit('mix-vol-val', {
+    min: 0, max: 100,
+    get: () => parseInt(sl.value, 10) || 0,
+    set: (v) => {
+      sl.value = v;
+      updateSliderFill(sl);
+      mixVolCommit();
+    }
+  });
+}
+
 function clampInt(v, min, max, dflt) {
   const n = parseInt(v, 10);
   if (isNaN(n)) return dflt;
@@ -2066,15 +2255,18 @@ async function pollWatchedIds() {
     const isLive = card.classList.contains('is-live');
     if (shouldBeLive !== isLive) {
       card.classList.toggle('is-live', shouldBeLive);
+      if (!shouldBeLive) card.classList.remove('in-game');
       const dot = card.querySelector('.card-dot');
       if (dot) {
         dot.classList.toggle('launched', shouldBeLive);
+        if (!shouldBeLive) dot.classList.remove('in-game');
         dot.title = shouldBeLive ? 'Launched' : 'Not launched';
       }
-      if (shouldBeLive) _launchedIds.add(id); else _launchedIds.delete(id);
+      if (shouldBeLive) { _launchedIds.add(id); ensurePresencePoll(); } else { _launchedIds.delete(id); }
       if (dropFromFilter && dropFromFilter(id)) card.remove();
     }
   });
+  stopPresencePollIfIdle();
 }
 function pollStatus() {
   pollRunningCount();
@@ -2238,8 +2430,10 @@ async function mixKillAll() {
   const res = await api.killAllRoblox();
   // Reset all dots / launched state.
   _launchedIds.clear();
-  document.querySelectorAll('.card-dot.launched').forEach(d => { d.classList.remove('launched'); d.title = 'Not launched'; });
+  document.querySelectorAll('.card.is-live').forEach(c => c.classList.remove('is-live', 'in-game'));
+  document.querySelectorAll('.card-dot.launched').forEach(d => { d.classList.remove('launched', 'in-game'); d.title = 'Not launched'; });
   refreshPkgAvatarStatus();
+  stopPresencePollIfIdle();
   await mixRefreshRunning();
   btns.forEach(b => { b.disabled = false; b.innerHTML = b.dataset.orig; });
   if (res && res.ok) {
@@ -2831,7 +3025,7 @@ function saveRegionPicker() {
     clicky: {
       label: 'Clicky',
       icon: 'keyboard',
-      desc: 'Cherry MX Blue - sharp tactile snap',
+      desc: 'Cherry MX Blue: sharp tactile snap',
       play(vol) {
         const ctx = _ctx(); const t = ctx.currentTime;
         // 1) Sharp high-freq click transient (the "tick" of the leaf spring)
@@ -2879,7 +3073,7 @@ function saveRegionPicker() {
     thocky: {
       label: 'Thocky',
       icon: 'piano',
-      desc: 'NK Cream - deep marbly thud',
+      desc: 'NK Cream: deep marbly thud',
       play(vol) {
         const ctx = _ctx(); const t = ctx.currentTime;
         // 1) Deep pitched thud (stem hitting the bottom housing)
@@ -2930,7 +3124,7 @@ function saveRegionPicker() {
     creamy: {
       label: 'Creamy',
       icon: 'water_drop',
-      desc: 'Gateron Yellow - buttery smooth glide',
+      desc: 'Gateron Yellow: buttery smooth glide',
       play(vol) {
         const ctx = _ctx(); const t = ctx.currentTime;
         // 1) Very soft initial contact (no click, just smooth compression)

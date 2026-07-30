@@ -148,10 +148,14 @@ pub fn enc_set_key(state: State<AppState>, pass: Option<String>) -> Value {
 
 #[tauri::command]
 pub async fn multiinstance_status(state: State<'_, AppState>) -> Result<Value, ()> {
+    // Defaults on, matching the startup path in lib.rs -- only an explicit
+    // false counts as off. These two used to disagree (false here, true
+    // there), so on a fresh install the toggle read "off" while the helper was
+    // already holding the mutex.
     let enabled = load_settings()
         .get("multiInstance")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(true);
     // "active" now means the one helper is up AND actually holding the mutex,
     // which is a stronger (and more honest) signal than "a child exists".
     let active = crate::helper::is_holding_mutex(&state).await;
@@ -302,6 +306,18 @@ pub fn fflag_write(flags: Value) -> bool {
     .is_ok()
 }
 
+// Compiled once instead of on every read/write. The patterns are constants,
+// so Regex::new can't fail on them -- doing it per call just re-paid the
+// compile and kept an unwrap in the path for no reason.
+static FPS_CAP_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+    regex::Regex::new(r#"(?i)<int\s+name="FramerateCap"\s*>(\d+)</int>"#).unwrap()
+});
+static FPS_CAP_REPLACE_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+    regex::Regex::new(r#"(?i)<int\s+name="FramerateCap"\s*>\d+</int>"#).unwrap()
+});
+static CLOSING_ITEM_RE: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"</Item>").unwrap());
+
 fn global_settings_path() -> std::path::PathBuf {
     let home = std::env::var("USERPROFILE").unwrap_or_default();
     std::path::PathBuf::from(home)
@@ -317,8 +333,8 @@ pub fn fps_read() -> i64 {
     let Ok(xml) = std::fs::read_to_string(&p) else {
         return 60;
     };
-    let re = regex::Regex::new(r#"(?i)<int\s+name="FramerateCap"\s*>(\d+)</int>"#).unwrap();
-    re.captures(&xml)
+    FPS_CAP_RE
+        .captures(&xml)
         .and_then(|c| c[1].parse::<i64>().ok())
         .unwrap_or(60)
 }
@@ -331,13 +347,12 @@ pub fn fps_write(cap: f64) -> Value {
     };
     let raw = cap.round().max(0.0) as i64;
     let value = if raw == 0 { 9999 } else { raw };
-    let re = regex::Regex::new(r#"(?i)<int\s+name="FramerateCap"\s*>\d+</int>"#).unwrap();
-    let new_xml = if re.is_match(&xml) {
-        re.replace(&xml, format!(r#"<int name="FramerateCap">{}</int>"#, value))
+    let new_xml = if FPS_CAP_REPLACE_RE.is_match(&xml) {
+        FPS_CAP_REPLACE_RE
+            .replace(&xml, format!(r#"<int name="FramerateCap">{}</int>"#, value))
             .to_string()
     } else {
-        let re2 = regex::Regex::new(r"</Item>").unwrap();
-        re2.replace(
+        CLOSING_ITEM_RE.replace(
             &xml,
             format!("\t\t<int name=\"FramerateCap\">{}</int>\n</Item>", value),
         )
@@ -518,6 +533,19 @@ pub async fn roblox_get_game_name(
 #[tauri::command]
 pub async fn roblox_get_json(state: State<'_, AppState>, url: String) -> Result<Value, String> {
     crate::roblox_api::get_json_public(&state, &url).await
+}
+
+// Presence check for the blue ("in the app") vs green ("in a game") account
+// card distinction. One request covers every currently-launched account --
+// any one of their cookies can query presence for the whole batch, Roblox
+// doesn't require the querying account to be in the list.
+#[tauri::command]
+pub async fn roblox_in_game_ids(
+    state: State<'_, AppState>,
+    cookie: String,
+    user_ids: Vec<i64>,
+) -> Result<Vec<i64>, String> {
+    crate::roblox_api::get_in_game_user_ids(&state, &cookie, &user_ids).await
 }
 
 #[tauri::command]
