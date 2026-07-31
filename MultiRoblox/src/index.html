@@ -17,12 +17,12 @@
     <span class="tb-running" id="tb-running" title="Roblox instances launched by MultiRoblox and still running" style="display:none"></span>
   </div>
   <div class="tb-drag"></div>
-  <button class="tb-btn" id="discord-btn" onclick="openDiscord()" title="Join our Discord" aria-label="Join our Discord" style="-webkit-app-region:no-drag">
+  <button class="tb-btn" id="discord-btn" onclick="openDiscord()" aria-label="Join our Discord" style="-webkit-app-region:no-drag">
     <svg width="15" height="15" viewBox="0 0 127.14 96.36" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
       <path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z"/>
     </svg>
   </button>
-  <button class="tb-btn" onclick="openModal('m-help')" title="Help" style="-webkit-app-region:no-drag"><span class="material-icons-round" style="font-size:15px">help_outline</span></button>
+  <button class="tb-btn" onclick="openModal('m-help')" style="-webkit-app-region:no-drag"><span class="material-icons-round" style="font-size:15px">help_outline</span></button>
   <div class="tb-controls">
     <button class="tb-btn" onclick="api.minimize()" aria-label="Minimize"><span class="material-icons-round">remove</span></button>
     <button class="tb-btn" onclick="api.maximize()" aria-label="Maximize"><span class="material-icons-round">crop_square</span></button>
@@ -59,7 +59,7 @@
       <span class="material-icons-round">favorite</span>Credits
     </button>
     <div class="nav-spacer"></div>
-    <button class="btn btn-danger kill-roblox-btn" id="nav-kill" onclick="mixKillAll()" title="Close every Roblox instance launched by MultiRoblox. Instances you started yourself are left alone.">
+    <button class="btn btn-danger kill-roblox-btn" id="nav-kill" onclick="mixKillAll()">
       <span class="material-icons-round" style="font-size:15px">power_settings_new</span>Kill Roblox
     </button>
     <div class="sb-afk" title="Keep instances past the 20-minute idle kick">
@@ -96,8 +96,8 @@
               </div>
             </div>
             <div class="view-toggle">
-              <button class="vt active" id="vt-grid" onclick="setAcctView('grid')" title="Grid view"><span class="material-icons-round">grid_view</span></button>
-              <button class="vt" id="vt-list" onclick="setAcctView('list')" title="List view"><span class="material-icons-round">view_list</span></button>
+              <button class="vt active" id="vt-grid" onclick="setAcctView('grid')"><span class="material-icons-round">grid_view</span></button>
+              <button class="vt" id="vt-list" onclick="setAcctView('list')"><span class="material-icons-round">view_list</span></button>
             </div>
           </div>
         </div>
@@ -204,9 +204,9 @@
               </div>
               <div class="mix-row">
                 <label class="mix-auto"><span class="toggle sm"><input type="checkbox" id="mix-fps-unl" onchange="mixFpsUnlToggle()"/><span class="toggle-trk"></span></span> Unlimited</label>
-                <input type="range" class="fps-slider" id="mix-fps" min="10" max="9999" step="1" value="60"
+                <input type="range" class="fps-slider" id="mix-fps" min="10" max="9999" step="5" value="60"
                        oninput="mixFpsInput(this.value)" onchange="mixFpsCommit()"/>
-                <span class="fps-val-label" id="mix-fps-val" style="min-width:40px" title="Click to type a value" onclick="editFpsValue()">60</span>
+                <span class="fps-val-label" id="mix-fps-val" style="min-width:40px">60</span>
               </div>
             </div>
           </div>
@@ -222,7 +222,7 @@
                 <span class="material-icons-round" style="font-size:17px;color:var(--t3);flex-shrink:0">volume_up</span>
                 <input type="range" class="fps-slider" id="mix-vol" min="0" max="100" step="1" value="100"
                        oninput="mixVolInput(this.value)" onchange="mixVolCommit()"/>
-                <span class="fps-val-label" id="mix-vol-val" style="min-width:40px" title="Click to type a value" onclick="editVolValue()">100%</span>
+                <span class="fps-val-label" id="mix-vol-val" style="min-width:40px">100%</span>
               </div>
             </div>
           </div>
@@ -231,7 +231,7 @@
             <button class="btn btn-primary" style="flex:1;justify-content:center;min-width:150px" onclick="mixApply()" id="mix-relaunch-btn">
               <span class="material-icons-round" style="font-size:15px">check</span>Apply
             </button>
-            <button class="btn btn-danger kill-roblox-btn" style="flex:1;justify-content:center;min-width:150px" onclick="mixKillAll()" id="mix-kill-btn" title="Close every Roblox instance launched by MultiRoblox. Instances you started yourself are left alone.">
+            <button class="btn btn-danger kill-roblox-btn" style="flex:1;justify-content:center;min-width:150px" onclick="mixKillAll()" id="mix-kill-btn">
               <span class="material-icons-round" style="font-size:15px">power_settings_new</span>Kill all Roblox
             </button>
           </div>
@@ -248,7 +248,7 @@
             <div class="sc-head">API Key</div>
             <div class="sr">
               <input type="password" id="gen-apikey" class="sr-input" placeholder="BLOX-XXXX... or MG_XXXX..." aria-label="BloxGen or Altgen API key" style="flex:1;width:auto;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;color:var(--t1)"/>
-              <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px;flex-shrink:0" onclick="genToggleKey()" id="gen-eye-btn" title="Show/hide key">
+              <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px;flex-shrink:0" onclick="genToggleKey()" id="gen-eye-btn">
                 <span class="material-icons-round" id="gen-eye-icon" style="font-size:14px">visibility</span>
               </button>
             </div>
@@ -258,7 +258,7 @@
             <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
               <div style="width:100%;display:flex;align-items:stretch;gap:8px">
                 <input type="text" id="gen-output" class="sr-input" readonly placeholder="click Generate to create an account" style="flex:1;width:auto;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;color:var(--t1);cursor:default;border-radius:var(--r2)"/>
-                <button id="gen-copy-btn" class="btn btn-ghost" style="padding:7px 12px;flex-shrink:0;border-radius:var(--r2)" onclick="genCopy()" title="Copy combo (user:pass)">
+                <button id="gen-copy-btn" class="btn btn-ghost" style="padding:7px 12px;flex-shrink:0;border-radius:var(--r2)" onclick="genCopy()">
                   <span class="material-icons-round" style="font-size:15px">content_copy</span>
                   <span style="font-size:11.5px">combo</span>
                 </button>
@@ -318,7 +318,7 @@
       <div class="page" id="page-settings">
         <div class="ph">
           <div class="ph-title">Settings</div>
-          <div class="ph-sub">App preferences, themes &amp; sounds</div>
+          <div class="ph-sub">App preferences &amp; themes</div>
         </div>
         <div class="tab-bar" style="flex-shrink:0">
           <button class="tab-btn active" id="stab-general" onclick="settingsTab('general')">General</button>
@@ -326,7 +326,6 @@
           <button class="tab-btn" id="stab-roblox" onclick="settingsTab('roblox')">Roblox</button>
           <button class="tab-btn" id="stab-privacy" onclick="settingsTab('privacy')">Data &amp; Privacy</button>
           <button class="tab-btn" id="stab-themes" onclick="settingsTab('themes')">Themes</button>
-          <button class="tab-btn" id="stab-sounds" onclick="settingsTab('sounds')">Sounds</button>
         </div>
         <div class="sw" id="stab-panel-general">
           <!-- Info row -->
@@ -463,7 +462,7 @@
               <div class="sr-left" style="width:100%"><div class="sr-label">Encryption key</div><div class="sr-desc">Change your encryption key here. You will need to re-enter it on your next launch.</div></div>
               <div style="width:100%;display:flex;gap:8px;align-items:center">
                 <input type="password" class="sr-input" id="custom-key" placeholder="e.g. SecureKey1234@A#" aria-label="Encryption key" style="flex:1;width:auto" oninput="onKeyInput()"/>
-                <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px" onclick="toggleKeyVisibility()" title="Show/hide">
+                <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px" onclick="toggleKeyVisibility()">
                   <span class="material-icons-round" style="font-size:14px" id="key-vis-icon">visibility</span>
                 </button>
                 <button class="btn btn-primary" style="font-size:12px;height:40px;padding:0 12px" onclick="saveKeySettings()" id="btn-save-key">Save</button>
@@ -614,50 +613,6 @@
             </div>
                     </div>
         </div>
-        <!-- Sounds tab panel -->
-        <div class="sw" id="stab-panel-sounds" style="display:none">
-          <div class="sc">
-            <div class="sc-head">Click Sound</div>
-            <div class="sr" style="padding-bottom:14px">
-              <div class="sr-left">
-                <div class="sr-label">Sound Profile</div>
-                <div class="sr-desc">Plays when you click buttons and interactive elements.</div>
-              </div>
-            </div>
-            <div style="padding:0 14px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px" id="sound-cards-grid">
-              <!-- injected by JS -->
-            </div>
-          </div>
-          <div class="sc">
-            <div class="sc-head">Custom Sound</div>
-            <div class="sr">
-              <div class="sr-left">
-                <div class="sr-label">Upload your own</div>
-                <div class="sr-desc">Use any .mp3 or .wav file as your click sound. Keep it short!</div>
-              </div>
-              <button class="btn btn-primary" onclick="soundPickCustom()">
-                <span class="material-icons-round" style="font-size:15px">upload</span>Add custom sound
-              </button>
-            </div>
-            <div id="custom-sound-slot" style="display:none;padding:0 14px 14px">
-            </div>
-          </div>
-          <div class="sc">
-            <div class="sc-head">Volume</div>
-            <div class="sr" style="flex-direction:column;align-items:stretch;gap:10px">
-              <div class="sr-left">
-                <div class="sr-label">Click volume</div>
-                <div class="sr-desc">Drag to adjust how loud the click sounds are.</div>
-              </div>
-              <div class="mix-row">
-                <span class="material-icons-round" style="font-size:17px;color:var(--t3);flex-shrink:0">volume_down</span>
-                <input type="range" class="fps-slider" id="sound-vol-slider" min="0" max="100" step="1" value="35" oninput="soundVolChange(this.value)">
-                <span class="fps-val-label" id="sound-vol-val" style="min-width:40px">35%</span>
-              </div>
-            </div>
-          </div>
-          <input type="file" id="sound-file-input" accept=".mp3,.wav,audio/*" style="display:none" onchange="soundFileLoaded(this)">
-        </div>
       </div>
       <!-- logs page -->
       <div class="page" id="page-logs">
@@ -739,13 +694,13 @@
     <div class="modal-sub" id="enc-desc" style="font-size:14px;margin-bottom:0">Enter the key you set to unlock your saved accounts.</div>
     <div style="display:flex;gap:8px;align-items:center;margin:14px 0 2px">
       <input type="password" class="sr-input" id="enc-input" placeholder="e.g. SecureKey1234@A#" style="flex:1;width:auto" onkeydown="if(event.key==='Enter')submitEnc()" autocomplete="off" spellcheck="false"/>
-      <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px" onclick="toggleKeyVisibility('enc-input','enc-vis-icon')" title="Show/hide" aria-label="Show or hide key">
+      <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px" onclick="toggleKeyVisibility('enc-input','enc-vis-icon')" aria-label="Show or hide key">
         <span class="material-icons-round" style="font-size:14px" id="enc-vis-icon">visibility</span>
       </button>
     </div>
     <div id="enc-err" style="display:none;color:var(--red);font-size:12px;margin-top:6px"></div>
     <div class="modal-actions" style="margin-top:16px">
-      <button class="btn btn-danger" id="enc-clear-data" onclick="clearAppData()" title="Permanently deletes all saved accounts, settings and this key">Clear data</button>
+      <button class="btn btn-danger" id="enc-clear-data" onclick="clearAppData()">Clear data</button>
       <button class="btn btn-primary" id="enc-action" onclick="submitEnc()">Unlock</button>
     </div>
   </div>

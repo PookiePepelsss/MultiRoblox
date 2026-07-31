@@ -64,17 +64,26 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 #layout{display:flex;height:calc(100vh - var(--tb));overflow:hidden}
 
 /* sidebar */
-#sidebar{width:var(--sb);flex-shrink:0;background:var(--s1);border-right:1px solid var(--bd);display:flex;flex-direction:column;padding:10px 8px}
+#sidebar{position:relative;width:var(--sb);flex-shrink:0;background:var(--s1);border-right:1px solid var(--bd);display:flex;flex-direction:column;padding:10px 8px}
+/* Positioned in px by JS (positionNavSlider), same approach as .tab-slider --
+   items are flex-laid-out with gaps, not a fixed row height, so the pill's
+   top/height come from the active item's own measured rect. */
+.nav-slider{position:absolute;left:8px;right:8px;border-radius:var(--r2);background-color:var(--ac);box-shadow:0 4px 12px -4px var(--ac3),0 1px 2px rgba(0,0,0,.3),inset 0 1px 0 rgba(255,255,255,.2);transition:top 220ms var(--smooth),height 220ms var(--smooth),opacity 150ms var(--smooth);pointer-events:none;z-index:0;opacity:0}
 /* Flat sidebar nav -- active state reads as a left accent bar (IDE-style),
    not a glossy floating pill. border-left is reserved at 2px on every item
    (transparent) so the active bar never shifts layout. */
-.nav-item{width:100%;display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:var(--r2);border:1px solid transparent;background:transparent;color:var(--t2);cursor:pointer;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;text-align:left;transition:background var(--dur) var(--smooth),color var(--dur) var(--smooth),transform var(--dur) var(--smooth),box-shadow var(--dur) var(--smooth)}
+.nav-item{position:relative;z-index:1;width:100%;display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:var(--r2);border:1px solid transparent;background:transparent;color:var(--t2);cursor:pointer;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;text-align:left;transition:background var(--dur) var(--smooth),color var(--dur) var(--smooth),transform var(--dur) var(--smooth),box-shadow var(--dur) var(--smooth)}
 .nav-item:hover{color:var(--t1);background:var(--s2);transform:translateY(-1px)}
-.nav-item:active{transform:translateY(1px)}
-
-.nav-item.active{background-color:var(--ac);color:#fff;border-color:rgba(0,0,0,.18);box-shadow:0 4px 12px -4px var(--ac3),0 1px 2px rgba(0,0,0,.3)}
-.nav-item.active:hover{transform:translateY(-1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.26),0 7px 16px -5px var(--ac3)}
-.nav-item.active:active{transform:translateY(1px)}
+/* .active no longer paints its own background/shadow -- .nav-slider (an
+   absolutely-positioned pill behind the row) supplies that now, and slides
+   between items instead of one background cutting out and the next in. */
+/* Explicit transparent background here, not just an absence of one: without
+   it, .nav-item:hover's background:var(--s2) still wins that property for
+   the active item too (nothing more specific overrides it), and since
+   .nav-item sits above .nav-slider in z-order, that dark fill painted right
+   over the purple pill -- the "turns black on hover" bug. */
+.nav-item.active,.nav-item.active:hover,.nav-item.active:active{color:#fff;background:transparent}
+.nav-item.active:hover{transform:none}
 .nav-item .material-icons-round{font-size:17px;flex-shrink:0}
 .nav-item+.nav-item{margin-top:2px}
 .nav-item.nav-danger{color:var(--red)}
@@ -111,8 +120,8 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .search input{flex:1;min-width:0;background:none;border:none;outline:none;color:var(--t1);font-family:'Inter',sans-serif;font-size:13px}
 .search input::placeholder{color:var(--t2)}
 .filter-wrap{position:relative}
-.btn-out{display:flex;align-items:center;gap:8px;height:40px;background:var(--s2);border:1px solid var(--bd);border-radius:var(--r2);padding:0 15px;color:var(--t1);font-family:'Inter',sans-serif;font-size:13px;font-weight:500;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3);transition:background var(--dur),border-color var(--dur),transform var(--dur),box-shadow var(--dur)}
-.btn-out:hover{border-color:var(--bd2);background:var(--s3);transform:translateY(-1px);box-shadow:0 5px 12px rgba(0,0,0,.36)}
+.btn-out{display:flex;align-items:center;gap:8px;height:40px;background:var(--s2);border:1px solid var(--bd);border-radius:var(--r2);padding:0 15px;color:var(--t1);font-family:'Inter',sans-serif;font-size:13px;font-weight:500;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 2px 6px rgba(0,0,0,.3);transition:background var(--dur),border-color var(--dur),transform var(--dur),box-shadow var(--dur)}
+.btn-out:hover{border-color:var(--bd2);background:var(--s3);transform:translateY(-1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 5px 12px rgba(0,0,0,.36)}
 .btn-out:active{transform:translateY(1px)}
 .btn-out.on{border-color:var(--ac)}
 .btn-out .material-icons-round{font-size:16px;color:var(--t2)}
@@ -237,25 +246,26 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .btn-danger{padding:8px 14px;background-color:var(--rd);color:var(--red);font-size:12.5px}
 .btn-danger:hover{background-color:rgba(239,68,68,.9);color:#fff}
 
-/* Flat raised buttons: drop shadow only, press-down on click. No gradient
-   overlay -- solid fill so it doesn't drift on custom accent colors. */
+/* Flat raised buttons: a thin inset top highlight reads as a subtle bevel on
+   any filled button, on by default (not hover-gated) -- no gradient overlay
+   involved, just a 1px inset line, so it doesn't drift on custom accents. */
 .btn-primary,.btn-launch{
   background-color:var(--ac);
   border:1px solid rgba(0,0,0,.18);
-  box-shadow:0 4px 12px -3px var(--ac3),0 1px 2px rgba(0,0,0,.35);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 4px 12px -3px var(--ac3),0 1px 2px rgba(0,0,0,.35);
 }
-.btn-primary:hover,.btn-launch:hover{opacity:1;transform:translateY(-1px);box-shadow:0 7px 18px -4px var(--ac3),0 2px 4px rgba(0,0,0,.4)}
-.btn.btn-primary:active,.btn.btn-launch:active{transform:translateY(1px);box-shadow:0 2px 5px -2px var(--ac3);opacity:1}
+.btn-primary:hover,.btn-launch:hover{opacity:1;transform:translateY(-1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.26),0 7px 18px -4px var(--ac3),0 2px 4px rgba(0,0,0,.4)}
+.btn.btn-primary:active,.btn.btn-launch:active{transform:translateY(1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 2px 5px -2px var(--ac3);opacity:1}
 .btn-ghost,.btn-edit,.btn-sm,.btn-del{
-  box-shadow:0 2px 6px rgba(0,0,0,.3);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 2px 6px rgba(0,0,0,.3);
 }
-.btn-ghost:hover,.btn-edit:hover{transform:translateY(-1px);box-shadow:0 5px 12px rgba(0,0,0,.36)}
+.btn-ghost:hover,.btn-edit:hover{transform:translateY(-1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 5px 12px rgba(0,0,0,.36)}
 .btn.btn-ghost:active,.btn.btn-edit:active{transform:translateY(1px);box-shadow:inset 0 1px 2px rgba(0,0,0,.3);opacity:1}
-.btn-del:hover{transform:translateY(-1px);box-shadow:0 5px 14px -3px rgba(240,111,111,.45)}
+.btn-del:hover{transform:translateY(-1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 5px 14px -3px rgba(240,111,111,.45)}
 .btn.btn-del:active{transform:translateY(1px);opacity:1}
 .btn.btn-sm:active{transform:translateY(1px);opacity:1}
 .btn-danger{
-  box-shadow:0 2px 6px rgba(0,0,0,.28);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 2px 6px rgba(0,0,0,.28);
 }
 .btn-danger:hover{transform:translateY(-1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 5px 14px -3px rgba(239,68,68,.5)}
 .btn.btn-danger:active{transform:translateY(1px);opacity:1}
@@ -322,7 +332,7 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .cdd-option.selected .cdd-check{opacity:1}
 
 /* modals */
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,.9);display:flex;align-items:center;justify-content:center;z-index:100;opacity:0;pointer-events:none;transition:opacity 200ms var(--smooth)}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.9);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);display:flex;align-items:center;justify-content:center;z-index:100;opacity:0;pointer-events:none;transition:opacity 200ms var(--smooth)}
 input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
 .overlay.open{opacity:1;pointer-events:all}
 .modal{position:relative;background:var(--s1);border:1px solid var(--bd2);border-radius:13px;width:350px;padding:22px;transform:scale(0.94) translateY(12px);transition:transform 260ms var(--spring),opacity 200ms var(--smooth);opacity:0;box-shadow:0 28px 64px rgba(0,0,0,.75)}
@@ -367,7 +377,7 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes cardIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 .spin{width:13px;height:13px;flex-shrink:0;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 500ms linear infinite;display:inline-block}
-.toast{position:fixed;bottom:14px;right:14px;background:var(--s2);border:1px solid var(--bd);border-radius:var(--r);padding:9px 14px;font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:6px;z-index:200;opacity:0;transform:translateY(10px);transition:opacity 200ms var(--smooth),transform 240ms var(--spring);pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,.5)}
+.toast{position:fixed;bottom:14px;right:14px;background:var(--s2);border:none;border-radius:var(--r);padding:9px 14px;font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:6px;z-index:200;opacity:0;transform:translateY(10px);transition:opacity 200ms var(--smooth),transform 240ms var(--spring);pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,.5)}
 .toast.show{opacity:1;transform:translateY(0)}
 .toast .material-icons-round{font-size:14px}
 .toast.ok{border-color:rgba(62,207,142,.3);color:var(--green)}
@@ -393,7 +403,7 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
 /* Positioned in px by JS (positionTabSlider) since segments aren't equal
    width. transition on left/width reads as a single pill sliding between
    tabs instead of one tab's color cutting out and the next cutting in. */
-.tab-slider{position:absolute;top:3px;height:calc(100% - 6px);border-radius:var(--r2);background-color:var(--ac);box-shadow:0 2px 8px -2px var(--ac3);transition:left 260ms var(--spring),width 260ms var(--spring),opacity 150ms var(--smooth);pointer-events:none;z-index:0;opacity:0}
+.tab-slider{position:absolute;top:3px;height:calc(100% - 6px);border-radius:var(--r2);background-color:var(--ac);box-shadow:inset 0 1px 0 rgba(255,255,255,.2),0 2px 8px -2px var(--ac3);transition:left 220ms var(--smooth),width 220ms var(--smooth),opacity 150ms var(--smooth);pointer-events:none;z-index:0;opacity:0}
 .num-wrap{position:relative;display:inline-flex;align-items:center;flex-shrink:0}
 .num-wrap input[type=number]{-moz-appearance:textfield;appearance:textfield;padding-right:22px}
 .num-wrap input[type=number]::-webkit-inner-spin-button,.num-wrap input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
@@ -406,7 +416,11 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
 .game-thumb-preview{width:100%;height:110px;object-fit:cover;border-radius:8px;background:var(--s3);display:block;margin-bottom:14px}
 .chart-search-wrap{padding:0 18px 7px;flex-shrink:0;box-sizing:border-box}
 .tab-btn{position:relative;z-index:1;padding:7px 13px;border-radius:var(--r2);border:none;background:transparent;color:var(--t2);font-family:'Inter',sans-serif;font-size:11.5px;font-weight:500;white-space:nowrap;cursor:pointer;transition:color var(--dur) var(--smooth)}
-.tab-btn:not(.active):hover{background:var(--s3);color:var(--t1)}
+/* var(--s3) here used to read as flat near-black against the track in dark
+   themes. Tinting the theme's own text color into transparent instead
+   guarantees a visible highlight (light tint on dark themes, dark tint on
+   light themes) without hardcoding a color that only works one way. */
+.tab-btn:not(.active):hover{background:color-mix(in srgb,var(--t1) 10%,transparent);color:var(--t1)}
 .tab-btn.active{color:#fff}
 
 /* charts page */
@@ -442,16 +456,21 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
 .mix-row{display:flex;align-items:center;gap:12px}
 .mix-row .fps-slider{flex:1;width:auto}
 .mix-auto{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:500;color:var(--t2);cursor:pointer;flex-shrink:0;-webkit-app-region:no-drag;user-select:none}
-.fps-val-label{font-size:12px;font-family:'Inter',sans-serif;font-weight:600;color:var(--t1);min-width:28px;text-align:right;flex-shrink:0;cursor:text;border-radius:4px;padding:1px 3px;margin:-1px -3px;transition:background var(--dur) var(--smooth)}
-.fps-val-label:hover{background:var(--s3)}
-.fps-val-input{width:52px;font-size:12px;font-family:'Inter',sans-serif;font-weight:600;color:var(--t1);text-align:right;background:var(--s2);border:1px solid var(--ac);border-radius:4px;padding:0 4px;outline:none;-moz-appearance:textfield}
-.fps-val-input::-webkit-outer-spin-button,.fps-val-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.fps-val-label{font-size:12px;font-family:'Inter',sans-serif;font-weight:600;color:var(--t1);min-width:28px;text-align:right;flex-shrink:0}
 .fps-slider:disabled{opacity:.35;cursor:not-allowed}
 .fps-slider:disabled::-webkit-slider-thumb{cursor:not-allowed}
-.fps-slider{-webkit-appearance:none;appearance:none;width:130px;height:6px;border-radius:3px;background:var(--s4);outline:none;cursor:pointer;-webkit-app-region:no-drag;flex-shrink:0;transition:background 50ms linear}
-.fps-slider::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;background:#fff;border:3px solid var(--ac);cursor:pointer;box-shadow:0 2px 5px rgba(0,0,0,.35);transition:transform 100ms var(--smooth),box-shadow 100ms var(--smooth)}
-.fps-slider::-webkit-slider-thumb:hover{transform:scale(1.12)}
-.fps-slider::-webkit-slider-thumb:active{transform:scale(1.22)}
+/* Thin flat track, solid accent-filled thumb instead of the old white-disc-
+   with-ring look, and a real focus ring since keyboard users had nothing to
+   show where focus was. */
+.fps-slider{-webkit-appearance:none;appearance:none;width:130px;height:4px;border-radius:2px;background:var(--s4);outline:none;cursor:pointer;-webkit-app-region:no-drag;flex-shrink:0;transition:background 50ms linear}
+/* Explicit track height so the thumb's centering math has something exact
+   to center against, instead of relying on the browser's own default track
+   rendering (which doesn't necessarily match the input element's own box). */
+.fps-slider::-webkit-slider-runnable-track{height:4px;border-radius:2px}
+.fps-slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-5px;border-radius:50%;background:#fff;border:2px solid var(--ac);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4);transition:transform 120ms var(--smooth),box-shadow 120ms var(--smooth)}
+.fps-slider::-webkit-slider-thumb:hover{transform:scale(1.2);box-shadow:0 2px 8px -1px var(--ac3)}
+.fps-slider::-webkit-slider-thumb:active{transform:scale(1.05)}
+.fps-slider:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 35%,transparent)}
 
 /* packages page */
 .pkg-list{display:flex;flex-direction:column;gap:10px}
@@ -593,21 +612,6 @@ body.theme-graphite{--bg:#0d0e10;--s1:#131418;--s2:#1a1c21;--s3:#23262d;--s4:#2e
 .credit-name{font-size:17px;font-weight:700;color:var(--t1);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .credit-discord{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--t2);background:var(--s3);border:1px solid var(--bd);border-radius:8px;padding:8px 13px;flex-shrink:0}
 .credit-discord .material-icons-round{font-size:15px;color:var(--t3)}
-
-/* ── Sound cards ─────────────────────────────────────────────────────────── */
-.sound-card{position:relative;border:1px solid var(--bd);border-radius:var(--r);background:var(--s2);padding:14px 14px 10px;cursor:pointer;transition:border-color var(--dur) var(--smooth),transform var(--dur) var(--smooth),box-shadow var(--dur) var(--smooth);display:flex;flex-direction:column;gap:4px;min-height:130px}
-.sound-card:hover{border-color:var(--bd2);transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.25)}
-.sound-card.sel{border-color:var(--ac);box-shadow:0 0 0 1px var(--ac),0 8px 20px -10px var(--ac3)}
-.sound-card-icon{width:36px;height:36px;border-radius:10px;background:var(--s3);display:flex;align-items:center;justify-content:center;margin-bottom:6px}
-.sound-card-icon .material-icons-round{font-size:18px;color:var(--t2)}
-.sound-card.sel .sound-card-icon{background:var(--ac2)}
-.sound-card.sel .sound-card-icon .material-icons-round{color:var(--ac)}
-.sound-card-label{font-size:13px;font-weight:600;color:var(--t1);letter-spacing:-.01em}
-.sound-card-desc{font-size:11.5px;color:var(--t3);line-height:1.4;flex:1}
-.sound-card-preview{position:absolute;top:10px;right:10px;width:26px;height:26px;border-radius:50%;border:1px solid var(--bd);background:var(--s3);color:var(--t2);display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity var(--dur),background var(--dur)}
-.sound-card-preview .material-icons-round{font-size:14px}
-.sound-card:hover .sound-card-preview{opacity:1}
-.sound-card-preview:hover{background:var(--ac);border-color:var(--ac);color:#fff}
 
 /* ── Context menu ────────────────────────────────────────────────────────── */
 .ctx-menu{position:fixed;z-index:9999;background:var(--s2);border:1px solid var(--bd2);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.45),0 2px 8px rgba(0,0,0,.3);padding:4px;min-width:180px;animation:ctxIn 80ms var(--smooth)}
