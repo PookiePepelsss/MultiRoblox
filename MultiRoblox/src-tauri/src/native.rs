@@ -124,13 +124,22 @@ pub async fn ensure_native_helper(app: &AppHandle, state: &AppState) -> Option<P
 }
 
 async fn resolve_native_helper(app: &AppHandle) -> Option<PathBuf> {
-    if let Some(p) = ensure_embedded_native_exe() {
-        return Some(p);
-    }
+    // Installed builds ship RobloxNative.exe as a normal loose resource next
+    // to MultiRoblox.exe (see tauri.conf.json's bundle.resources) -- prefer
+    // that plain, installer-placed file over self-extracting the embedded
+    // copy. A binary that writes another PE from its own resources to disk
+    // at runtime and executes it is a classic dropper behavior pattern to
+    // heuristic/ML antivirus scanners, even when (as here) it's benign; not
+    // doing that at all in the common case is strictly better than doing it
+    // and hoping a scanner doesn't mind. The embedded fallback below still
+    // covers running the bare .exe standalone without its resources/ folder.
     if let Some(b) = bundled_native_exe_path(app) {
         if b.exists() {
             return Some(b);
         }
+    }
+    if let Some(p) = ensure_embedded_native_exe() {
+        return Some(p);
     }
     let src = native_src_path(app)?;
     if !src.exists() {
@@ -781,10 +790,6 @@ fn get_latest_roblox_install() -> Option<(&'static str, PathBuf, PathBuf)> {
     best.map(|(root, dir, exe, _)| (root, dir, exe))
 }
 
-fn get_latest_roblox_version_dir() -> Option<(PathBuf, PathBuf)> {
-    get_latest_roblox_install().map(|(_, dir, exe)| (dir, exe))
-}
-
 fn dirs_home() -> Option<PathBuf> {
     std::env::var("USERPROFILE").ok().map(PathBuf::from)
 }
@@ -821,11 +826,20 @@ const MIN_PLAUSIBLE_EXE_BYTES: u64 = 5_000_000;
 // roblox-player: URI fallback, which hands off to Roblox's own updater to
 // fetch/launch the real LIVE client instead.
 async fn spawn_roblox_direct(roblox_uri: &str, live_version: Option<&str>) -> Option<u32> {
-    let (dir, exe) = get_latest_roblox_version_dir()?;
-    if let Some(live) = live_version {
-        let installed = dir.file_name()?.to_str()?;
-        if installed != live {
-            return None;
+    let (root, dir, exe) = get_latest_roblox_install()?;
+    // Bootstrapper forks (Bloxstrap etc.) only touch their version folder's
+    // mtime/name on their OWN update cadence, not on every Roblox content
+    // update -- so this folder-name compare can go permanently stale for
+    // them even on a fully current install. That made lock-channel users on
+    // a bootstrapper fail this check on every single launch, fall through to
+    // the roblox-player: URI updater every time, and effectively "redownload"
+    // Roblox on every launch. Only vanilla installs keep this signal honest.
+    if root == "Roblox" {
+        if let Some(live) = live_version {
+            let installed = dir.file_name()?.to_str()?;
+            if installed != live {
+                return None;
+            }
         }
     }
     let meta = std::fs::metadata(&exe).ok()?;

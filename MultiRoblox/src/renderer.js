@@ -205,6 +205,7 @@ async function continueInit() {
   renderPackages();
   applySettings();
   refreshMultiStatus();
+  positionNavSlider(); // covers landing on the default page without a goTo() call
   detectRobloxVersion();
   showAppVersion();
   startStatusPoll();
@@ -566,14 +567,45 @@ function positionTabSlider(barEl) {
   }
   const active = barEl.querySelector('.tab-btn.active');
   if (!active) { slider.style.opacity = '0'; return; }
-  const barRect = barEl.getBoundingClientRect();
-  const btnRect = active.getBoundingClientRect();
   if (isNew) slider.style.transition = 'none';
-  slider.style.left = (btnRect.left - barRect.left) + 'px';
-  slider.style.width = btnRect.width + 'px';
+  // offsetLeft/offsetWidth, not getBoundingClientRect: they're relative to
+  // the padding edge of the nearest positioned ancestor (here, barEl itself,
+  // since both are its direct children) -- exactly what CSS `left` on an
+  // absolutely-positioned sibling measures from. getBoundingClientRect
+  // instead gives the border-box's outer edge, so subtracting two of those
+  // was off by the bar's own border-width in every direction: a small,
+  // constant, one-sided-looking gap.
+  slider.style.left = active.offsetLeft + 'px';
+  slider.style.width = active.offsetWidth + 'px';
   slider.style.opacity = '1';
   if (isNew) {
     void slider.offsetWidth; // force layout so the disabled transition applies before restoring it
+    slider.style.transition = '';
+  }
+}
+// Same technique as positionTabSlider, vertical instead of horizontal -- nav
+// items are flex-stacked with gaps rather than a fixed row height, so top/
+// height come from the active item's measured rect, not an assumed index.
+function positionNavSlider() {
+  const bar = document.getElementById('sidebar');
+  if (!bar) return;
+  let slider = bar.querySelector('.nav-slider');
+  const isNew = !slider;
+  if (isNew) {
+    slider = document.createElement('div');
+    slider.className = 'nav-slider';
+    bar.insertBefore(slider, bar.firstChild);
+  }
+  const active = bar.querySelector('.nav-item.active');
+  if (!active) { slider.style.opacity = '0'; return; }
+  if (isNew) slider.style.transition = 'none';
+  // See positionTabSlider's comment -- offsetTop/offsetHeight, not
+  // getBoundingClientRect, for the same padding-edge-vs-border-edge reason.
+  slider.style.top = active.offsetTop + 'px';
+  slider.style.height = active.offsetHeight + 'px';
+  slider.style.opacity = '1';
+  if (isNew) {
+    void slider.offsetWidth;
     slider.style.transition = '';
   }
 }
@@ -581,27 +613,28 @@ window.addEventListener('resize', () => {
   document.querySelectorAll('.tab-bar').forEach(bar => {
     if (bar.querySelector('.tab-btn.active')) positionTabSlider(bar);
   });
+  positionNavSlider();
 });
 
 function settingsTab(tab) {
-  ['general','performance','roblox','privacy','themes','sounds'].forEach(t => {
+  ['general','performance','roblox','privacy','themes'].forEach(t => {
     const panel = document.getElementById('stab-panel-' + t);
     const btn = document.getElementById('stab-' + t);
     if (panel) panel.style.display = t === tab ? '' : 'none';
     if (btn) btn.classList.toggle('active', t === tab);
   });
-  if (tab === 'sounds') typeof soundRenderPage === 'function' && soundRenderPage();
   if (tab === 'performance') renderEngineInit();
   refreshAllSliderFills();
   positionTabSlider(document.getElementById('stab-general')?.closest('.tab-bar'));
 }
 
 function goTo(p) {
-  if (p === 'sounds' || p === 'themes') { goTo('settings'); settingsTab(p); return; }
+  if (p === 'themes') { goTo('settings'); settingsTab(p); return; }
   document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(x => x.classList.remove('active'));
   document.getElementById('page-' + p).classList.add('active');
   document.getElementById('nav-' + p).classList.add('active');
+  positionNavSlider();
   if (p === 'settings') {
     document.getElementById('stat-count').textContent = accounts.length;
     refreshMultiStatus();
@@ -863,10 +896,10 @@ function render() {
         <button class="btn btn-launch" onclick="openLaunch('${a.id}')">
           Start
         </button>
-        <button class="btn btn-edit" onclick="openEdit('${a.id}')" title="Edit" aria-label="Edit account">
+        <button class="btn btn-edit" onclick="openEdit('${a.id}')" aria-label="Edit account">
           <span class="material-icons-round">edit</span>
         </button>
-        <button class="btn btn-del" onclick="removeAcc('${a.id}')" title="Remove" aria-label="Remove account">
+        <button class="btn btn-del" onclick="removeAcc('${a.id}')" aria-label="Remove account">
           <span class="material-icons-round">delete_outline</span>
         </button>
       </div>
@@ -1548,10 +1581,10 @@ function renderPackages() {
         </div>
         <div class="pkg-avatars">${avatarsHtml}</div>
         <div class="pkg-card-actions">
-          <button class="btn btn-edit" onclick="openEditPackage('${p.id}')" title="Manage accounts" aria-label="Manage accounts">
+          <button class="btn btn-edit" onclick="openEditPackage('${p.id}')" aria-label="Manage accounts">
             <span class="material-icons-round">group</span>
           </button>
-          <button class="btn btn-del" onclick="deletePackage('${p.id}')" title="Delete package" aria-label="Delete package">
+          <button class="btn btn-del" onclick="deletePackage('${p.id}')" aria-label="Delete package">
             <span class="material-icons-round">delete_outline</span>
           </button>
         </div>
@@ -1566,7 +1599,7 @@ function renderPackages() {
         <button class="btn btn-launch pkg-launch-btn" onclick="launchPackage('${p.id}')" ${members.length ? '' : 'disabled'}>
           Start All
         </button>
-        <button class="btn btn-del pkg-kill-btn" onclick="killPackage('${p.id}')" title="Kill running instances in this group" ${members.some(m => _launchedIds.has(m.id)) ? '' : 'disabled'}>
+        <button class="btn btn-del pkg-kill-btn" onclick="killPackage('${p.id}')" ${members.some(m => _launchedIds.has(m.id)) ? '' : 'disabled'}>
           <span class="material-icons-round">power_settings_new</span>
         </button>
       </div>
@@ -2142,74 +2175,6 @@ async function mixFpsCommit() {
   toast('FPS cap: ' + v + ' (next launch)', 'ok');
 }
 
-// Swaps a value label for a number input in place. Commit paths (mixFpsCommit/
-// mixVolCommit) already overwrite the label's textContent with the new value,
-// which naturally removes the input from the DOM -- only the cancel path
-// (Escape) needs to manually restore what was there before.
-function startValueEdit(labelId, opts) {
-  const label = document.getElementById(labelId);
-  if (!label || label.querySelector('input')) return;
-  const { min, max, get, set } = opts;
-  const current = get();
-  const prevHTML = label.innerHTML;
-  const input = document.createElement('input');
-  input.type = 'number';
-  input.className = 'fps-val-input';
-  input.min = min; input.max = max;
-  input.value = current;
-  label.textContent = '';
-  label.appendChild(input);
-  input.focus();
-  input.select();
-  input.addEventListener('click', e => e.stopPropagation());
-  let done = false;
-  const finish = (commit) => {
-    if (done) return;
-    done = true;
-    if (commit) {
-      let v = parseInt(input.value, 10);
-      if (Number.isNaN(v)) v = current;
-      v = Math.max(min, Math.min(max, v));
-      set(v);
-    } else {
-      label.innerHTML = prevHTML;
-    }
-  };
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
-    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-  });
-  input.addEventListener('blur', () => finish(true));
-}
-
-function editFpsValue() {
-  const unl = document.getElementById('mix-fps-unl');
-  const sl = document.getElementById('mix-fps');
-  if (unl.checked) { unl.checked = false; sl.disabled = false; }
-  startValueEdit('mix-fps-val', {
-    min: 10, max: 9999,
-    get: () => parseInt(sl.value, 10) || 60,
-    set: (v) => {
-      sl.value = v >= 9999 ? 9999 : Math.round(v / 5) * 5;
-      updateSliderFill(sl);
-      mixFpsCommit();
-    }
-  });
-}
-
-function editVolValue() {
-  const sl = document.getElementById('mix-vol');
-  startValueEdit('mix-vol-val', {
-    min: 0, max: 100,
-    get: () => parseInt(sl.value, 10) || 0,
-    set: (v) => {
-      sl.value = v;
-      updateSliderFill(sl);
-      mixVolCommit();
-    }
-  });
-}
-
 function clampInt(v, min, max, dflt) {
   const n = parseInt(v, 10);
   if (isNaN(n)) return dflt;
@@ -2426,7 +2391,7 @@ function mixVolCommit() {
 async function mixKillAll() {
   const btns = Array.from(document.querySelectorAll('.kill-roblox-btn'));
   if (!btns.length || btns[0].disabled) return;
-  btns.forEach(b => { b.disabled = true; b.dataset.orig = b.innerHTML; b.innerHTML = '<div class="spin"></div>Stopping'; });
+  btns.forEach(b => { b.disabled = true; });
   const res = await api.killAllRoblox();
   // Reset all dots / launched state.
   _launchedIds.clear();
@@ -2435,7 +2400,7 @@ async function mixKillAll() {
   refreshPkgAvatarStatus();
   stopPresencePollIfIdle();
   await mixRefreshRunning();
-  btns.forEach(b => { b.disabled = false; b.innerHTML = b.dataset.orig; });
+  btns.forEach(b => { b.disabled = false; });
   if (res && res.ok) {
     const n = res.killed || 0;
     // Only instances this app launched are killed, so say how many rather
@@ -2593,8 +2558,8 @@ function _ghAppendBatch(list) {
     row.innerHTML =
       '<span class="gh-user"><span style="color:var(--t3)">User:</span> ' + esc(h.username) + '  <span style="color:var(--t3)">Pass:</span> ' + esc(h.password) + '</span>' +
       '<div class="gh-actions">' +
-        '<button class="btn btn-ghost" title="Copy combo"><span class="material-icons-round" style="font-size:15px">content_copy</span></button>' +
-        '<button class="btn btn-ghost" title="Add to accounts"><span class="material-icons-round" style="font-size:15px">person_add</span></button>' +
+        '<button class="btn btn-ghost"><span class="material-icons-round" style="font-size:15px">content_copy</span></button>' +
+        '<button class="btn btn-ghost"><span class="material-icons-round" style="font-size:15px">person_add</span></button>' +
       '</div>';
     const btns = row.querySelectorAll('button');
     btns[0].onclick = () => genHistCopy(i);
@@ -2628,8 +2593,8 @@ function _ghPrepend() {
   row.innerHTML =
     '<span class="gh-user"><span style="color:var(--t3)">User:</span> ' + esc(h.username) + '  <span style="color:var(--t3)">Pass:</span> ' + esc(h.password) + '</span>' +
     '<div class="gh-actions">' +
-      '<button class="btn btn-ghost" title="Copy combo"><span class="material-icons-round" style="font-size:15px">content_copy</span></button>' +
-      '<button class="btn btn-ghost" title="Add to accounts"><span class="material-icons-round" style="font-size:15px">person_add</span></button>' +
+      '<button class="btn btn-ghost"><span class="material-icons-round" style="font-size:15px">content_copy</span></button>' +
+      '<button class="btn btn-ghost"><span class="material-icons-round" style="font-size:15px">person_add</span></button>' +
     '</div>';
   const btns = row.querySelectorAll('button');
   btns[0].onclick = () => genHistCopy(0);
@@ -2757,8 +2722,8 @@ function renderTrackingPage() {
       </div>
       <div class="tracking-account-actions">
         <label class="toggle sm" title="Include in timed capture"><input type="checkbox" data-track-timed="${a.id}" onchange="toggleTimedTrackingAccount('${a.id}')" ${timedIds.has(a.id) ? 'checked' : ''}/><span class="toggle-trk"></span></label>
-        <button class="btn btn-ghost" onclick="openRegionPicker('${a.id}')" title="Outline capture spots"><span class="material-icons-round" style="font-size:15px">crop</span></button>
-        <button class="btn btn-ghost" data-track-capture="${a.id}" onclick="captureTrackingNow('${a.id}')" ${_launchedIds.has(a.id) ? '' : 'disabled'} title="Capture now"><span class="material-icons-round" style="font-size:15px">photo_camera</span></button>
+        <button class="btn btn-ghost" onclick="openRegionPicker('${a.id}')"><span class="material-icons-round" style="font-size:15px">crop</span></button>
+        <button class="btn btn-ghost" data-track-capture="${a.id}" onclick="captureTrackingNow('${a.id}')" ${_launchedIds.has(a.id) ? '' : 'disabled'}><span class="material-icons-round" style="font-size:15px">photo_camera</span></button>
       </div>
     </div>`;
   }).join('');
@@ -2969,454 +2934,4 @@ function saveRegionPicker() {
     });
     renderRegionBoxes();
   });
-})();
-
-// ── Sound Effects ──────────────────────────────────────────────────────────
-(function() {
-  let _audioCtx = null;
-  function _ctx() {
-    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    return _audioCtx;
-  }
-
-  // ── Synth helpers ─────────────────────────────────────────────────────────
-  function _playBuf(buf, vol) {
-    const ctx = _ctx();
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    const g = ctx.createGain();
-    g.gain.value = vol;
-    src.connect(g); g.connect(ctx.destination);
-    src.start(); src.stop(ctx.currentTime + buf.duration);
-  }
-
-  function _makeBuf(durationSec, fillFn) {
-    const ctx = _ctx();
-    const sr = ctx.sampleRate;
-    const len = Math.ceil(sr * durationSec);
-    const buf = ctx.createBuffer(1, len, sr);
-    fillFn(buf.getChannelData(0), sr, len);
-    return buf;
-  }
-
-  function _noise(d) { return Math.random() * 2 - 1; }
-
-  // ── Synth voice helpers ───────────────────────────────────────────────────
-  function _osc(ctx, type, freq, t, duration, gainStart, gainEnd) {
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = type;
-    o.frequency.setValueAtTime(freq, t);
-    g.gain.setValueAtTime(gainStart, t);
-    g.gain.exponentialRampToValueAtTime(Math.max(gainEnd, 0.0001), t + duration);
-    o.connect(g); g.connect(ctx.destination);
-    o.start(t); o.stop(t + duration + 0.005);
-    return { o, g };
-  }
-  function _filt(ctx, type, freq, Q) {
-    const f = ctx.createBiquadFilter();
-    f.type = type; f.frequency.value = freq;
-    if (Q !== undefined) f.Q.value = Q;
-    return f;
-  }
-
-  // ── Sound profiles ────────────────────────────────────────────────────────
-  const SOUND_PROFILES = {
-    clicky: {
-      label: 'Clicky',
-      icon: 'keyboard',
-      desc: 'Cherry MX Blue: sharp tactile snap',
-      play(vol) {
-        const ctx = _ctx(); const t = ctx.currentTime;
-        // 1) Sharp high-freq click transient (the "tick" of the leaf spring)
-        const clickBuf = _makeBuf(0.008, (d, sr) => {
-          for (let i = 0; i < d.length; i++) {
-            const x = i / sr;
-            d[i] = (_noise() * 0.7 + Math.sin(2*Math.PI*3200*x) * 0.3) * Math.exp(-x * 1800);
-          }
-        });
-        const clickSrc = ctx.createBufferSource(); clickSrc.buffer = clickBuf;
-        const hp1 = _filt(ctx, 'highpass', 3500);
-        const g1 = ctx.createGain(); g1.gain.setValueAtTime(vol * 2.5, t); g1.gain.exponentialRampToValueAtTime(0.001, t + 0.008);
-        clickSrc.connect(hp1); hp1.connect(g1); g1.connect(ctx.destination);
-        clickSrc.start(t); clickSrc.stop(t + 0.01);
-
-        // 2) Mid-range body snap (plastic housing resonance)
-        const snapBuf = _makeBuf(0.025, (d, sr) => {
-          for (let i = 0; i < d.length; i++) {
-            const x = i / sr;
-            d[i] = (_noise() * 0.5 + Math.sin(2*Math.PI*1100*x) * 0.4 + Math.sin(2*Math.PI*2200*x) * 0.1)
-                  * Math.exp(-x * 350);
-          }
-        });
-        const snapSrc = ctx.createBufferSource(); snapSrc.buffer = snapBuf;
-        const bp1 = _filt(ctx, 'bandpass', 1400, 1.2);
-        const g2 = ctx.createGain(); g2.gain.setValueAtTime(vol * 1.8, t); g2.gain.exponentialRampToValueAtTime(0.001, t + 0.025);
-        snapSrc.connect(bp1); bp1.connect(g2); g2.connect(ctx.destination);
-        snapSrc.start(t); snapSrc.stop(t + 0.03);
-
-        // 3) Low-end bottom-out thud
-        const thudBuf = _makeBuf(0.035, (d, sr) => {
-          for (let i = 0; i < d.length; i++) {
-            const x = i / sr;
-            d[i] = (_noise() * 0.3 + Math.sin(2*Math.PI*180*x) * 0.7) * Math.exp(-x * 180);
-          }
-        });
-        const thudSrc = ctx.createBufferSource(); thudSrc.buffer = thudBuf;
-        const lp1 = _filt(ctx, 'lowpass', 600);
-        const g3 = ctx.createGain(); g3.gain.setValueAtTime(vol * 0.6, t + 0.004); g3.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
-        thudSrc.connect(lp1); lp1.connect(g3); g3.connect(ctx.destination);
-        thudSrc.start(t + 0.004); thudSrc.stop(t + 0.045);
-      }
-    },
-
-    thocky: {
-      label: 'Thocky',
-      icon: 'piano',
-      desc: 'NK Cream: deep marbly thud',
-      play(vol) {
-        const ctx = _ctx(); const t = ctx.currentTime;
-        // 1) Deep pitched thud (stem hitting the bottom housing)
-        const thudBuf = _makeBuf(0.12, (d, sr) => {
-          for (let i = 0; i < d.length; i++) {
-            const x = i / sr;
-            // Pitch starts high and drops (impact character)
-            const freq = 95 + 280 * Math.exp(-x * 60);
-            d[i] = (Math.sin(2*Math.PI*freq*x) * 0.65
-                  + Math.sin(2*Math.PI*freq*1.6*x) * 0.2
-                  + _noise() * 0.15)
-                  * Math.exp(-x * 65);
-          }
-        });
-        const thudSrc = ctx.createBufferSource(); thudSrc.buffer = thudBuf;
-        const lp2 = _filt(ctx, 'lowpass', 700);
-        const g1 = ctx.createGain(); g1.gain.setValueAtTime(vol * 1.8, t); g1.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
-        thudSrc.connect(lp2); lp2.connect(g1); g1.connect(ctx.destination);
-        thudSrc.start(t); thudSrc.stop(t + 0.13);
-
-        // 2) Soft high transient (muted click, not snappy)
-        const transBuf = _makeBuf(0.015, (d, sr) => {
-          for (let i = 0; i < d.length; i++) {
-            d[i] = _noise() * Math.exp(-(i/sr) * 900);
-          }
-        });
-        const transSrc = ctx.createBufferSource(); transSrc.buffer = transBuf;
-        const bp2 = _filt(ctx, 'bandpass', 900, 0.7);
-        const g2 = ctx.createGain(); g2.gain.setValueAtTime(vol * 0.7, t); g2.gain.exponentialRampToValueAtTime(0.001, t + 0.015);
-        transSrc.connect(bp2); bp2.connect(g2); g2.connect(ctx.destination);
-        transSrc.start(t); transSrc.stop(t + 0.02);
-
-        // 3) Low frequency body resonance for that "marble" feel
-        const resBuf = _makeBuf(0.08, (d, sr) => {
-          for (let i = 0; i < d.length; i++) {
-            const x = i/sr;
-            d[i] = Math.sin(2*Math.PI*55*x) * Math.exp(-x * 90) * 0.9;
-          }
-        });
-        const resSrc = ctx.createBufferSource(); resSrc.buffer = resBuf;
-        const lp3 = _filt(ctx, 'lowpass', 200);
-        const g3 = ctx.createGain(); g3.gain.setValueAtTime(vol * 0.9, t); g3.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
-        resSrc.connect(lp3); lp3.connect(g3); g3.connect(ctx.destination);
-        resSrc.start(t); resSrc.stop(t + 0.09);
-      }
-    },
-
-    creamy: {
-      label: 'Creamy',
-      icon: 'water_drop',
-      desc: 'Gateron Yellow: buttery smooth glide',
-      play(vol) {
-        const ctx = _ctx(); const t = ctx.currentTime;
-        // 1) Very soft initial contact (no click, just smooth compression)
-        const softBuf = _makeBuf(0.07, (d, sr) => {
-          for (let i = 0; i < d.length; i++) {
-            const x = i / sr;
-            const freq = 130 + 100 * Math.exp(-x * 40);
-            d[i] = (Math.sin(2*Math.PI*freq*x) * 0.55
-                  + Math.sin(2*Math.PI*freq*2.1*x) * 0.25
-                  + Math.sin(2*Math.PI*freq*3.3*x) * 0.12
-                  + _noise() * 0.08)
-                  * Math.exp(-x * 110);
-          }
-        });
-        const softSrc = ctx.createBufferSource(); softSrc.buffer = softBuf;
-        const bp3 = _filt(ctx, 'bandpass', 280, 0.6);
-        const g1 = ctx.createGain(); g1.gain.setValueAtTime(vol * 1.6, t); g1.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
-        softSrc.connect(bp3); bp3.connect(g1); g1.connect(ctx.destination);
-        softSrc.start(t); softSrc.stop(t + 0.075);
-
-        // 2) Very subtle air/brush noise (lubed stem feel)
-        const brushBuf = _makeBuf(0.05, (d, sr) => {
-          for (let i = 0; i < d.length; i++) {
-            d[i] = _noise() * Math.exp(-(i/sr) * 200) * 0.5;
-          }
-        });
-        const brushSrc = ctx.createBufferSource(); brushSrc.buffer = brushBuf;
-        const bp4 = _filt(ctx, 'bandpass', 500, 1.5);
-        const g2 = ctx.createGain(); g2.gain.setValueAtTime(vol * 0.3, t); g2.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
-        brushSrc.connect(bp4); bp4.connect(g2); g2.connect(ctx.destination);
-        brushSrc.start(t); brushSrc.stop(t + 0.06);
-
-        // 3) Warm low-end resonance
-        const warmBuf = _makeBuf(0.06, (d, sr) => {
-          for (let i = 0; i < d.length; i++) {
-            const x = i/sr;
-            d[i] = (Math.sin(2*Math.PI*70*x) * 0.6 + Math.sin(2*Math.PI*140*x) * 0.4)
-                  * Math.exp(-x * 140);
-          }
-        });
-        const warmSrc = ctx.createBufferSource(); warmSrc.buffer = warmBuf;
-        const lp4 = _filt(ctx, 'lowpass', 350);
-        const g3 = ctx.createGain(); g3.gain.setValueAtTime(vol * 1.0, t); g3.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
-        warmSrc.connect(lp4); lp4.connect(g3); g3.connect(ctx.destination);
-        warmSrc.start(t); warmSrc.stop(t + 0.07);
-      }
-    },
-
-    poppy: {
-      label: 'Poppy',
-      icon: 'bubble_chart',
-      desc: 'Light airy pop',
-      play(vol) {
-        const ctx = _ctx(); const t = ctx.currentTime;
-        const buf = _makeBuf(0.025, (d, sr) => {
-          for (let i = 0; i < d.length; i++) {
-            const x = i/sr;
-            d[i] = _noise() * Math.exp(-x*1100);
-          }
-        });
-        const src = ctx.createBufferSource(); src.buffer = buf;
-        const bp = ctx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=1800; bp.Q.value=1.2;
-        const g = ctx.createGain(); g.gain.setValueAtTime(vol*1.8, t); g.gain.exponentialRampToValueAtTime(0.001, t+0.025);
-        src.connect(bp); bp.connect(g); g.connect(ctx.destination);
-        src.start(t); src.stop(t+0.025);
-      }
-    },
-
-    typewriter: {
-      label: 'Typewriter',
-      icon: 'article',
-      desc: 'Vintage key rattle',
-      play(vol) {
-        const ctx = _ctx(); const t = ctx.currentTime;
-        // Main strike
-        const buf = _makeBuf(0.035, (d, sr) => {
-          for (let i = 0; i < d.length; i++) {
-            const x = i/sr;
-            d[i] = _noise() * Math.exp(-x*350)
-                 + Math.sin(2*Math.PI*280*x) * Math.exp(-x*500) * 0.5;
-          }
-        });
-        const src = ctx.createBufferSource(); src.buffer = buf;
-        const hp = ctx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=1500;
-        const g = ctx.createGain(); g.gain.setValueAtTime(vol*1.6, t); g.gain.exponentialRampToValueAtTime(0.001, t+0.035);
-        src.connect(hp); hp.connect(g); g.connect(ctx.destination);
-        src.start(t); src.stop(t+0.035);
-        // rattle tail
-        const buf2 = _makeBuf(0.02, (d, sr) => {
-          for (let i = 0; i < d.length; i++) d[i] = _noise() * Math.exp(-(i/sr)*500);
-        });
-        const src2 = ctx.createBufferSource(); src2.buffer = buf2;
-        const hp2 = ctx.createBiquadFilter(); hp2.type='highpass'; hp2.frequency.value=2500;
-        const g2 = ctx.createGain(); g2.gain.setValueAtTime(vol*0.5, t+0.018); g2.gain.exponentialRampToValueAtTime(0.001, t+0.038);
-        src2.connect(hp2); hp2.connect(g2); g2.connect(ctx.destination);
-        src2.start(t+0.018); src2.stop(t+0.04);
-      }
-    },
-
-    off: {
-      label: 'Off',
-      icon: 'volume_off',
-      desc: 'No sound',
-      play() {}
-    }
-  };
-
-  // ── State ─────────────────────────────────────────────────────────────────
-  // Defaults to off for a fresh install -- only kicks in when localStorage
-  // has no saved preference yet, so anyone who already picked a profile
-  // keeps it untouched.
-  let _currentProfile = 'off';
-  let _volume = 0.35;
-
-  try {
-    const saved = localStorage.getItem('sound-profile');
-    if (saved && SOUND_PROFILES[saved]) _currentProfile = saved;
-    const sv = localStorage.getItem('sound-volume');
-    if (sv !== null) _volume = parseFloat(sv);
-  } catch {}
-
-  // ── Play current ──────────────────────────────────────────────────────────
-  window._soundPlay = function() {
-    if (_currentProfile.startsWith('__custom__')) {
-      const cid = _currentProfile.slice('__custom__'.length);
-      const s = _customSounds.find(x => x.id === cid);
-      if (s) _playBuf(s.buffer, _volume);
-    } else if (SOUND_PROFILES[_currentProfile]) {
-      SOUND_PROFILES[_currentProfile].play(_volume);
-    }
-  };
-
-  // ── Click listener ────────────────────────────────────────────────────────
-  const INTERACTIVE = [
-    'button','a','.nav-item','.card','.card-add','.theme-card',
-    '.tb-btn','.btn','.filter-menu button','.chart-card',
-    '[role="button"]','.cdd-trigger','.cdd-option','.pkg-launch-btn',
-    'input[type="checkbox"]','input[type="radio"]','.nav-add',
-    '.gen-hist-row','.modal-close','.modal .btn','.sound-card'
-  ].join(',');
-
-  document.addEventListener('click', e => {
-    if (e.target.closest(INTERACTIVE)) window._soundPlay();
-  }, true);
-
-  // ── Multi-custom sounds state ─────────────────────────────────────────────
-  // _customSounds: Array<{ id: string, name: string, buffer: AudioBuffer }>
-  let _customSounds = [];
-  let _customSoundIdCounter = 0;
-
-  function _saveCustomSoundMeta() {
-    try {
-      localStorage.setItem('sound-customs-meta', JSON.stringify(
-        _customSounds.map(s => ({ id: s.id, name: s.name }))
-      ));
-    } catch {}
-  }
-
-  // ── Sounds page UI ────────────────────────────────────────────────────────
-  window.soundRenderPage = function() {
-    const grid = document.getElementById('sound-cards-grid');
-    if (!grid) return;
-
-    // Built-in profile cards
-    const builtinHtml = Object.entries(SOUND_PROFILES).map(([id, p]) => `
-      <div class="sound-card ${_currentProfile === id ? 'sel' : ''}" data-sid="${id}" onclick="soundSelect('${id}')">
-        <div class="sound-card-icon"><span class="material-icons-round">${p.icon}</span></div>
-        <div class="sound-card-label">${p.label}</div>
-        <div class="sound-card-desc">${p.desc}</div>
-        <button class="sound-card-preview" onclick="event.stopPropagation();soundPreview('${id}')" title="Preview">
-          <span class="material-icons-round">play_arrow</span>
-        </button>
-      </div>`).join('');
-
-    // Custom sound cards (one per uploaded sound)
-    const customHtml = _customSounds.map(s => `
-      <div class="sound-card ${_currentProfile === '__custom__' + s.id ? 'sel' : ''}" onclick="soundSelectCustom('${s.id}')">
-        <div class="sound-card-icon"><span class="material-icons-round">audiotrack</span></div>
-        <div class="sound-card-label" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px" title="${esc(s.name)}">${esc(s.name)}</div>
-        <div class="sound-card-desc">Custom sound</div>
-        <div style="display:flex;gap:4px;margin-top:auto">
-          <button class="sound-card-preview" onclick="event.stopPropagation();soundPreviewCustom('${s.id}')" title="Preview">
-            <span class="material-icons-round">play_arrow</span>
-          </button>
-          <button class="sound-card-preview" onclick="event.stopPropagation();soundDeleteCustom('${s.id}')" title="Delete" style="background:rgba(255,80,80,.15);color:#ff6b6b">
-            <span class="material-icons-round icon-delete">delete</span>
-          </button>
-        </div>
-      </div>`).join('');
-
-    grid.innerHTML = builtinHtml + customHtml;
-
-    const slider = document.getElementById('sound-vol-slider');
-    if (slider) slider.value = Math.round(_volume * 100);
-    const lbl = document.getElementById('sound-vol-val');
-    if (lbl) lbl.textContent = Math.round(_volume * 100) + '%';
-  };
-
-  window.soundSelect = function(id) {
-    _currentProfile = id;
-    try { localStorage.setItem('sound-profile', id); } catch {}
-    soundRenderPage();
-    SOUND_PROFILES[id]?.play(_volume);
-  };
-
-  window.soundSelectCustom = function(cid) {
-    const s = _customSounds.find(x => x.id === cid);
-    if (!s) return;
-    _currentProfile = '__custom__' + cid;
-    try { localStorage.setItem('sound-profile', '__custom__' + cid); } catch {}
-    soundRenderPage();
-    _playBuf(s.buffer, _volume);
-  };
-
-  window.soundPreview = function(id) {
-    SOUND_PROFILES[id]?.play(_volume);
-  };
-
-  window.soundPreviewCustom = function(cid) {
-    const s = _customSounds.find(x => x.id === cid);
-    if (s) _playBuf(s.buffer, _volume);
-  };
-
-  window.soundDeleteCustom = function(cid) {
-    const idx = _customSounds.findIndex(x => x.id === cid);
-    if (idx === -1) return;
-    _customSounds.splice(idx, 1);
-    // If deleted sound was active, restore the default profile.
-    if (_currentProfile === '__custom__' + cid) {
-      _currentProfile = 'creamy';
-      try { localStorage.setItem('sound-profile', 'creamy'); } catch {}
-    }
-    _saveCustomSoundMeta();
-    soundRenderPage();
-    toast('Custom sound removed', 'ok');
-  };
-
-  window.soundVolChange = function(val) {
-    _volume = val / 100;
-    try { localStorage.setItem('sound-volume', _volume); } catch {}
-    const lbl = document.getElementById('sound-vol-val');
-    if (lbl) lbl.textContent = val + '%';
-  };
-
-  window.soundPickCustom = function() {
-    document.getElementById('sound-file-input')?.click();
-  };
-
-  window.soundFileLoaded = function(input) {
-    const file = input.files[0];
-    if (!file) return;
-    const name = file.name.replace(/\.[^.]+$/, ''); // strip extension
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const ctx = _ctx();
-        const buffer = await ctx.decodeAudioData(e.target.result);
-        const cid = 'c' + (++_customSoundIdCounter);
-        _customSounds.push({ id: cid, name, buffer });
-        _currentProfile = '__custom__' + cid;
-        try { localStorage.setItem('sound-profile', '__custom__' + cid); } catch {}
-        _saveCustomSoundMeta();
-        soundRenderPage();
-        _playBuf(buffer, _volume);
-        toast('Custom sound loaded!', 'ok');
-      } catch {
-        toast('Could not decode audio file', 'err');
-      }
-    };
-    reader.readAsArrayBuffer(file);
-    input.value = '';
-  };
-
-  // soundRenderPage is called by settingsTab('sounds') via goTo redirect
-
-  // Restore custom sound IDs from storage (buffers can't be persisted, just names for display)
-  try {
-    const meta = localStorage.getItem('sound-customs-meta');
-    if (meta) {
-      const arr = JSON.parse(meta);
-      _customSoundIdCounter = arr.length;
-      // Note: AudioBuffers can't be stored in localStorage. Show names but they will need re-upload.
-    }
-  } catch {}
-
-  // Handle legacy single custom sound profile key
-  try {
-    const saved = localStorage.getItem('sound-profile');
-    if (saved && saved.startsWith('__custom__') && !_customSounds.length) {
-      _currentProfile = 'clicky';
-      try { localStorage.setItem('sound-profile', 'clicky'); } catch {}
-    }
-  } catch {}
-
 })();
