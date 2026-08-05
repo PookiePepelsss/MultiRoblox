@@ -78,10 +78,10 @@
     // exempt from this, which is why this needs a Rust-side detour).
     // Returns { ok, status, data } to mirror the fetch()+r.json() shape callers used.
     robloxGet: (url) => invoke('roblox_get_json', { url }),
-    robloxInGameIds: (cookie, userIds) => invoke('roblox_in_game_ids', { cookie, userIds }),
     // api.altgen.me sends no Access-Control-Allow-Origin either -- same CORS
     // gap as robloxGet above. Returns { status, data } (data is the API's own
     // { success, message/error, data } JSON body).
+    followUser: (cookie, username) => invoke('roblox_follow_user', { cookie, username }),
     altgenGenerate: (apiKey, quantity) => invoke('altgen_generate', { apiKey, quantity }),
   };
 

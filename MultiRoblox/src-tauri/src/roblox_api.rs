@@ -537,46 +537,6 @@ async fn post_raw(
     }
 }
 
-// userPresenceType from Roblox: 0 Offline, 1 Online (on the site/app, not in
-// a game), 2 InGame, 3 InStudio. Only presence type 2 means "actually in a
-// game" -- the account card's blue-vs-green distinction rides on that, not on
-// whether the process itself is running (that part is already known locally
-// the moment do_launch spawns it).
-pub async fn get_in_game_user_ids(
-    state: &AppState,
-    cookie: &str,
-    user_ids: &[i64],
-) -> Result<Vec<i64>, String> {
-    if user_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let csrf = get_csrf_token(state, cookie)
-        .await
-        .ok_or_else(|| "could not get CSRF token".to_string())?;
-    let body = serde_json::json!({ "userIds": user_ids }).to_string();
-    let (status, _headers, resp_body) = post_raw(
-        state,
-        "https://presence.roblox.com/v1/presence/users",
-        cookie,
-        &csrf,
-        &body,
-    )
-    .await;
-    if status != 200 {
-        return Err(format!("presence HTTP {}", status));
-    }
-    let json: Value = serde_json::from_str(&resp_body).map_err(|e| e.to_string())?;
-    let presences = json.get("userPresences").and_then(|v| v.as_array());
-    let Some(presences) = presences else {
-        return Err("unexpected presence response shape".into());
-    };
-    Ok(presences
-        .iter()
-        .filter(|p| p.get("userPresenceType").and_then(|v| v.as_i64()) == Some(2))
-        .filter_map(|p| p.get("userId").and_then(|v| v.as_i64()))
-        .collect())
-}
-
 pub async fn get_access_code(
     state: &AppState,
     place_id: &str,
@@ -757,4 +717,103 @@ pub async fn altgen_generate(
     let status = res.status().as_u16();
     let data: Value = res.json().await.unwrap_or(Value::Null);
     Ok(serde_json::json!({ "status": status, "data": data }))
+}
+
+// ---- follow user ----
+// Resolves a username to the place/server they're currently in, so an account
+// can be launched straight into it. Two hops: username -> userId, then
+// presence -> placeId + gameId (the job/server id).
+//
+// Roblox only reports placeId/gameId here when the target's "who can see me
+// online" privacy setting allows it AND they're in a joinable public server,
+// so a "not joinable" result is frequently the target's own privacy/server
+// state rather than a lookup failure -- the distinct messages below matter
+// for the user being able to tell those apart.
+pub async fn follow_user_target(
+    state: &AppState,
+    cookie: &str,
+    username: &str,
+) -> Result<Value, String> {
+    let name = username.trim().trim_start_matches('@');
+    if name.is_empty() {
+        return Err("Enter a username".into());
+    }
+
+    let csrf = get_csrf_token(state, cookie)
+        .await
+        .ok_or_else(|| "Could not authenticate (cookie may be expired)".to_string())?;
+
+    // 1. username -> userId
+    let body = serde_json::json!({
+        "usernames": [name],
+        "excludeBannedUsers": false
+    })
+    .to_string();
+    let (status, _h, resp) = post_raw(
+        state,
+        "https://users.roblox.com/v1/usernames/users",
+        cookie,
+        &csrf,
+        &body,
+    )
+    .await;
+    if status != 200 {
+        return Err(format!("Username lookup failed (HTTP {})", status));
+    }
+    let json: Value = serde_json::from_str(&resp).map_err(|e| e.to_string())?;
+    let user = json
+        .get("data")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| format!("No Roblox user named \"{}\"", name))?;
+    let user_id = user
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| "Unexpected username lookup response".to_string())?;
+    let real_name = user
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(name)
+        .to_string();
+
+    // 2. userId -> current presence
+    let body = serde_json::json!({ "userIds": [user_id] }).to_string();
+    let (status, _h, resp) = post_raw(
+        state,
+        "https://presence.roblox.com/v1/presence/users",
+        cookie,
+        &csrf,
+        &body,
+    )
+    .await;
+    if status != 200 {
+        return Err(format!("Presence lookup failed (HTTP {})", status));
+    }
+    let json: Value = serde_json::from_str(&resp).map_err(|e| e.to_string())?;
+    let p = json
+        .get("userPresences")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| "Unexpected presence response".to_string())?;
+
+    // 0 Offline, 1 Online (site/app, not in a game), 2 InGame, 3 InStudio.
+    let ptype = p.get("userPresenceType").and_then(|v| v.as_i64()).unwrap_or(0);
+    if ptype != 2 {
+        return Err(format!("{} is not in a game right now", real_name));
+    }
+
+    let place_id = p.get("placeId").and_then(|v| v.as_i64());
+    let job_id = p.get("gameId").and_then(|v| v.as_str());
+    match (place_id, job_id) {
+        (Some(pid), Some(jid)) if !jid.is_empty() => Ok(serde_json::json!({
+            "username": real_name,
+            "target": format!("{}:{}", pid, jid),
+        })),
+        // In a game, but Roblox withheld the server details -- that's the
+        // target's join-privacy setting, not an error on our side.
+        _ => Err(format!(
+            "{} is in a game, but their server isn't joinable (their privacy settings may hide it)",
+            real_name
+        )),
+    }
 }

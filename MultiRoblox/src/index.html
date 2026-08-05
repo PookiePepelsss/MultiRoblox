@@ -245,12 +245,39 @@
         </div>
         <div class="sw">
           <div class="sc">
-            <div class="sc-head">API Key</div>
+            <div class="sc-head">Setup</div>
             <div class="sr">
-              <input type="password" id="gen-apikey" class="sr-input" placeholder="BLOX-XXXX... or MG_XXXX..." aria-label="BloxGen or Altgen API key" style="flex:1;width:auto;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;color:var(--t1)"/>
+              <div class="sr-left"><div class="sr-label">API key</div></div>
+              <input type="password" id="gen-apikey" class="sr-input" placeholder="BLOX-XXXX... or MG_XXXX..." aria-label="BloxGen or Altgen API key" oninput="genOnKeyInput()" style="flex:1;width:auto;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;color:var(--t1)"/>
               <button class="btn btn-ghost" style="font-size:12px;height:40px;padding:0 12px;flex-shrink:0" onclick="genToggleKey()" id="gen-eye-btn">
                 <span class="material-icons-round" id="gen-eye-icon" style="font-size:14px">visibility</span>
               </button>
+            </div>
+            <div class="sr" id="gen-type-row" style="display:none">
+              <div class="sr-left"><div class="sr-label">Account type</div><div class="sr-desc" id="gen-type-desc">Fresh alt accounts</div></div>
+              <div class="cdd" id="cdd-gentype" style="width:170px">
+                <div class="cdd-trigger" id="cdd-gentype-trigger" onclick="toggleCdd('gentype')" role="button" tabindex="0" aria-label="Account type">
+                  <span class="cdd-label" id="cdd-gentype-label">Alt</span>
+                  <span class="material-icons-round cdd-arrow">expand_more</span>
+                </div>
+                <div class="cdd-menu" id="cdd-gentype-menu">
+                  <div class="cdd-option selected" data-value="alt" onclick="genSetType('alt','Alt','Fresh alt accounts')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">Alt</div><div class="cdd-opt-desc">Fresh alt accounts</div></div>
+                  </div>
+                  <div class="cdd-option" data-value="+30 days old" onclick="genSetType('+30 days old','+30 days old','Accounts aged 30+ days')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">+30 days old</div><div class="cdd-opt-desc">Accounts aged 30+ days</div></div>
+                  </div>
+                  <div class="cdd-option" data-value="+1 year old" onclick="genSetType('+1 year old','+1 year old','Accounts aged 1+ year')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">+1 year old</div><div class="cdd-opt-desc">Accounts aged 1+ year</div></div>
+                  </div>
+                  <div class="cdd-option" data-value="5+ years old" onclick="genSetType('5+ years old','5+ years old','Accounts aged 5+ years')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">5+ years old</div><div class="cdd-opt-desc">Accounts aged 5+ years</div></div>
+                  </div>
+                  <div class="cdd-option" data-value="dump" onclick="genSetType('dump','Dump','Dump accounts with extra account metadata')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">Dump</div><div class="cdd-opt-desc">Extra account metadata</div></div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
           <div class="sc">
@@ -262,15 +289,17 @@
                   <span class="material-icons-round" style="font-size:15px">content_copy</span>
                   <span style="font-size:11.5px">combo</span>
                 </button>
+                <button id="gen-add-btn" class="btn btn-primary" style="padding:7px 12px;flex-shrink:0;border-radius:var(--r2)" onclick="genAddToAccounts()">
+                  <span class="material-icons-round" style="font-size:15px">person_add</span>
+                  <span style="font-size:11.5px">add</span>
+                </button>
               </div>
               <div id="gen-counter" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--t3);letter-spacing:.02em"></div>
             </div>
           </div>
-          <div style="display:flex;gap:8px;margin-top:12px">
-            <button id="gen-btn" class="btn btn-primary" style="flex:1;justify-content:center" onclick="genCombo()">
-              <span class="material-icons-round" style="font-size:15px">bolt</span>Generate
-            </button>
-          </div>
+          <button id="gen-btn" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:2px;margin-bottom:12px;height:42px" onclick="genCombo()">
+            <span class="material-icons-round" style="font-size:15px">bolt</span><span>Generate</span>
+          </button>
           <div class="sc" id="gen-history-sc" style="display:none;margin-top:12px">
             <div class="sc-head" style="display:flex;align-items:center;justify-content:space-between;padding-right:10px">
               History
@@ -805,6 +834,16 @@
     <div class="field">
       <label for="in-target">Game ID, Invite Link, or Private Server Link</label>
       <input type="text" id="in-target" placeholder="e.g. 6872265039 or https://www.roblox.com/share?..."/>
+    </div>
+    <div class="field">
+      <label for="in-follow">Follow user</label>
+      <div style="display:flex;gap:8px;align-items:stretch">
+        <input type="text" id="in-follow" placeholder="username" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter'){event.preventDefault();followUserLookup();}"/>
+        <button class="btn btn-ghost" id="follow-btn" style="flex-shrink:0" onclick="followUserLookup()">
+          <span class="material-icons-round" style="font-size:15px">person_search</span><span>Find</span>
+        </button>
+      </div>
+      <div class="field-hint" id="follow-status">Finds the server they're in and fills the target above.</div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('m-edit')">Cancel</button>

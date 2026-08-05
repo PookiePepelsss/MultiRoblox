@@ -213,6 +213,11 @@ async function continueInit() {
   startTrackingLoop();
   logEntry('info', 'system', 'MultiRoblox started', { version: 'v1', accounts: accounts.length, platform: navigator.platform });
   try { const k = localStorage.getItem('bloxgen_apikey'); if (k) { const el = document.getElementById('gen-apikey'); if (el) el.value = k; } } catch {}
+  genOnKeyInput();
+  try {
+    const t = GEN_TYPES.find(x => x.value === localStorage.getItem('bloxgen_type'));
+    if (t) genSetType(t.value, t.label, t.desc);
+  } catch {}
   try { const afkStat = await api.antiAfkStatus(); if (afkStat && afkStat.enabled) logEntry('info', 'afk', `Anti-AFK is enabled on startup (active: ${afkStat.active})`, { enabled: afkStat.enabled, active: afkStat.active }); } catch {}
   try { _genHistory = (await api.readGenHistory()) || []; genRenderHistory(); } catch {}
 
@@ -234,22 +239,20 @@ async function continueInit() {
     const closedAcct = accounts.find(a => a.id === id);
     logEntry('info', 'close', `Roblox closed for ${closedAcct ? closedAcct.username : id}`, { accountId: id, username: closedAcct?.username || null, userId: closedAcct?.userId || null });
     const card = document.querySelector(`.card[data-id="${id}"]`);
-    if (card) card.classList.remove('is-live', 'in-game');
+    if (card) card.classList.remove('is-live');
     const dot = document.querySelector(`.card[data-id="${id}"] .card-dot`);
-    if (dot) { dot.classList.remove('launched', 'in-game'); dot.title = 'Not launched'; }
+    if (dot) { dot.classList.remove('launched'); dot.title = 'Not launched'; }
     refreshPkgAvatarStatus();
     pollRunningCount();
-    stopPresencePollIfIdle();
   });
 
   api.onAllRobloxClosed(() => {
     logEntry('warn', 'close', 'All Roblox instances closed');
     _launchedIds.clear();
-    document.querySelectorAll('.card.is-live').forEach(c => c.classList.remove('is-live', 'in-game'));
-    document.querySelectorAll('.card-dot.launched').forEach(d => { d.classList.remove('launched', 'in-game'); d.title = 'Not launched'; });
+    document.querySelectorAll('.card.is-live').forEach(c => c.classList.remove('is-live'));
+    document.querySelectorAll('.card-dot.launched').forEach(d => { d.classList.remove('launched'); d.title = 'Not launched'; });
     refreshPkgAvatarStatus();
     pollRunningCount();
-    stopPresencePollIfIdle();
     if (document.getElementById('page-mixer')?.classList.contains('active')) mixRefreshRunning();
   });
 
@@ -664,49 +667,6 @@ function markLaunched(id) {
 
   }
   refreshPkgAvatarStatus();
-  ensurePresencePoll();
-}
-
-function markInGame(id, inGame) {
-  const card = document.querySelector(`.card[data-id="${id}"]`);
-  if (card) card.classList.toggle('in-game', inGame);
-  const dot = card ? card.querySelector('.card-dot') : null;
-  if (dot) dot.classList.toggle('in-game', inGame);
-}
-
-// Blue-vs-green needs Roblox's own presence data, which the process being up
-// (do_launch's PID) can't tell you -- a client can be fully launched and
-// sitting on the home menu for a while before it ever joins a place. Polled
-// rather than pushed since nothing local changes state when a game is
-// joined; the interval only runs while at least one account is launched.
-let _presencePollTimer = null;
-const PRESENCE_POLL_MS = 12000;
-function ensurePresencePoll() {
-  if (_presencePollTimer || _launchedIds.size === 0) return;
-  _presencePollTimer = setInterval(pollPresence, PRESENCE_POLL_MS);
-  pollPresence();
-}
-function stopPresencePollIfIdle() {
-  if (_launchedIds.size === 0 && _presencePollTimer) {
-    clearInterval(_presencePollTimer);
-    _presencePollTimer = null;
-  }
-}
-async function pollPresence() {
-  const launched = accounts.filter(a => _launchedIds.has(a.id) && a.userId);
-  if (!launched.length) { stopPresencePollIfIdle(); return; }
-  const cookie = launched.find(a => a.cookie)?.cookie;
-  if (!cookie) return;
-  const userIds = [...new Set(launched.map(a => a.userId))];
-  let inGameIds;
-  try {
-    inGameIds = await api.robloxInGameIds(cookie, userIds);
-  } catch {
-    return; // transient failure -- leave existing indicators as they were
-  }
-  if (!Array.isArray(inGameIds)) return;
-  const inGameSet = new Set(inGameIds);
-  launched.forEach(a => markInGame(a.id, inGameSet.has(a.userId)));
 }
 
 async function killOne(id) {
@@ -1408,8 +1368,44 @@ function openEdit(id) {
   document.getElementById('in-nickname').value = editAcc.nickname || '';
   document.getElementById('in-description').value = editAcc.description || '';
   document.getElementById('in-target').value = editAcc.gameTarget || '';
+  // Reset follow field/status -- it's a lookup tool, not a saved value.
+  document.getElementById('in-follow').value = '';
+  followSetStatus("Finds the server they're in and fills the target above.", '');
   openModal('m-edit');
   setTimeout(() => document.getElementById('in-nickname').focus(), 220);
+}
+
+function followSetStatus(msg, kind) {
+  const el = document.getElementById('follow-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = kind === 'err' ? 'var(--red)' : (kind === 'ok' ? 'var(--green)' : '');
+}
+
+// Uses this account's own cookie for the lookup -- presence/username APIs both
+// need an authenticated session, and the account being edited is the one that
+// would do the joining anyway.
+async function followUserLookup() {
+  const input = document.getElementById('in-follow');
+  const btn = document.getElementById('follow-btn');
+  const label = btn ? btn.querySelector('span:last-child') : null;
+  const username = (input.value || '').trim();
+  if (!username) { followSetStatus('Enter a username', 'err'); return; }
+  if (!editAcc || !editAcc.cookie) { followSetStatus('This account has no saved cookie', 'err'); return; }
+
+  if (btn) btn.disabled = true;
+  if (label) label.textContent = 'Finding';
+  followSetStatus('Looking up ' + username + '...', '');
+  try {
+    const res = await api.followUser(editAcc.cookie, username);
+    document.getElementById('in-target').value = res.target;
+    followSetStatus('Found ' + res.username + " -- target set, click Save to keep it.", 'ok');
+  } catch (e) {
+    followSetStatus(typeof e === 'string' ? e : (e.message || 'Lookup failed'), 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+    if (label) label.textContent = 'Find';
+  }
 }
 
 async function saveEdit() {
@@ -1866,7 +1862,7 @@ document.addEventListener('keydown', e => {
     const editEl = document.getElementById('m-edit');
     if (editEl.classList.contains('open')) {
       // Escape shouldn't discard the modal out from under someone mid-typing.
-      const typing = ['in-target', 'in-nickname', 'in-description']
+      const typing = ['in-target', 'in-nickname', 'in-description', 'in-follow']
         .some(f => document.activeElement === document.getElementById(f));
       if (!typing) closeModal('m-edit');
     } else document.querySelectorAll('.overlay.open').forEach(m => m.classList.remove('open'));
@@ -2220,18 +2216,15 @@ async function pollWatchedIds() {
     const isLive = card.classList.contains('is-live');
     if (shouldBeLive !== isLive) {
       card.classList.toggle('is-live', shouldBeLive);
-      if (!shouldBeLive) card.classList.remove('in-game');
       const dot = card.querySelector('.card-dot');
       if (dot) {
         dot.classList.toggle('launched', shouldBeLive);
-        if (!shouldBeLive) dot.classList.remove('in-game');
         dot.title = shouldBeLive ? 'Launched' : 'Not launched';
       }
-      if (shouldBeLive) { _launchedIds.add(id); ensurePresencePoll(); } else { _launchedIds.delete(id); }
+      if (shouldBeLive) _launchedIds.add(id); else _launchedIds.delete(id);
       if (dropFromFilter && dropFromFilter(id)) card.remove();
     }
   });
-  stopPresencePollIfIdle();
 }
 function pollStatus() {
   pollRunningCount();
@@ -2395,10 +2388,9 @@ async function mixKillAll() {
   const res = await api.killAllRoblox();
   // Reset all dots / launched state.
   _launchedIds.clear();
-  document.querySelectorAll('.card.is-live').forEach(c => c.classList.remove('is-live', 'in-game'));
-  document.querySelectorAll('.card-dot.launched').forEach(d => { d.classList.remove('launched', 'in-game'); d.title = 'Not launched'; });
+  document.querySelectorAll('.card.is-live').forEach(c => c.classList.remove('is-live'));
+  document.querySelectorAll('.card-dot.launched').forEach(d => { d.classList.remove('launched'); d.title = 'Not launched'; });
   refreshPkgAvatarStatus();
-  stopPresencePollIfIdle();
   await mixRefreshRunning();
   btns.forEach(b => { b.disabled = false; });
   if (res && res.ok) {
@@ -2453,6 +2445,41 @@ function genToggleKey() {
   else { inp.type = 'password'; icon.textContent = 'visibility'; }
 }
 
+// Literal values BloxGen's API expects for `type`, confirmed against their
+// own /api/prices response (which echoes these back as its object keys) --
+// the docs only ever show these as human-readable labels in prose, and
+// guessing at slugs like "30day" instead would have silently 400'd.
+const GEN_TYPES = [
+  { value: 'alt', label: 'Alt', desc: 'Fresh alt accounts' },
+  { value: '+30 days old', label: '+30 days old', desc: 'Accounts aged 30+ days' },
+  { value: '+1 year old', label: '+1 year old', desc: 'Accounts aged 1+ year' },
+  { value: '5+ years old', label: '5+ years old', desc: 'Accounts aged 5+ years' },
+  { value: 'dump', label: 'Dump', desc: 'Dump accounts with extra account metadata' },
+];
+let _genType = 'alt';
+
+// Account-type selection only applies to BloxGen (Altgen has no equivalent
+// tiers in what this app sends it), so the row hides itself for an Altgen
+// key instead of showing a control that does nothing.
+function genOnKeyInput() {
+  const apiKey = (document.getElementById('gen-apikey').value || '').trim();
+  const row = document.getElementById('gen-type-row');
+  if (row) row.style.display = apiKey.startsWith('BLOX-') ? '' : 'none';
+}
+
+function genSetType(value, label, desc) {
+  _genType = value;
+  const lbl = document.getElementById('cdd-gentype-label');
+  const dsc = document.getElementById('gen-type-desc');
+  if (lbl) lbl.textContent = label;
+  if (dsc) dsc.textContent = desc;
+  document.querySelectorAll('#cdd-gentype-menu .cdd-option').forEach(o => {
+    o.classList.toggle('selected', o.dataset.value === value);
+  });
+  try { localStorage.setItem('bloxgen_type', value); } catch {}
+  closeAllCdd();
+}
+
 // Provider is auto-detected from the key's prefix so the single API-key field
 // works for either service: BLOX- = BloxGen, MG_ = Altgen (altgen.me/docs).
 async function genCombo() {
@@ -2469,13 +2496,17 @@ async function genCombo() {
 
   const btn = document.getElementById('gen-btn');
   const out = document.getElementById('gen-output');
-  if (btn) { btn.textContent = 'Generating'; btn.disabled = true; }
+  const btnLabel = btn ? btn.querySelector('span:last-child') : null;
+  if (btn) { btn.disabled = true; if (btnLabel) btnLabel.textContent = 'Generating'; }
 
   try {
     const d = provider === 'bloxgen' ? await genBloxgen(apiKey) : await genAltgen(apiKey);
 
     out.value = d.username + ':' + d.password;
     out.select();
+
+    const counter = document.getElementById('gen-counter');
+    if (counter) counter.textContent = d.type ? ('Generated: ' + d.type + (d.cost != null ? ' · cost ' + d.cost : '')) : '';
 
     // Store in history
     if (_genClearPromise) await _genClearPromise; // let a pending Clear's disk write land first
@@ -2489,11 +2520,11 @@ async function genCombo() {
     const toCopy = d.cookie || (d.username + ':' + d.password);
     navigator.clipboard.writeText(toCopy).catch(() => {});
 
-    if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
+    if (btn) { btn.disabled = false; if (btnLabel) btnLabel.textContent = 'Generate'; }
 
   } catch (e) {
     toast(e.message || 'Generation failed', 'err');
-    if (btn) { btn.textContent = 'Generate'; btn.disabled = false; }
+    if (btn) { btn.disabled = false; if (btnLabel) btnLabel.textContent = 'Generate'; }
   }
 }
 
@@ -2501,7 +2532,7 @@ async function genBloxgen(apiKey) {
   const resp = await fetch('https://core.bloxgen.net/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiKey, type: 'alt' })
+    body: JSON.stringify({ apiKey, type: _genType })
   });
   const data = await resp.json();
   if (!data.success) throw new Error(data.message || data.error || 'Generation failed');
@@ -2531,7 +2562,18 @@ function genRenderHistory() {
   const list = document.getElementById('gen-history-list');
   const sc = document.getElementById('gen-history-sc');
   if (!list || !sc) return;
-  if (_genHistory.length === 0) { sc.style.display = 'none'; return; }
+  if (_genHistory.length === 0) {
+    // Hiding the section alone left old rows sitting in the DOM -- the next
+    // _ghPrepend() (on the very next Generate) would reveal the section
+    // again with every "cleared" row still there, underneath the new one,
+    // now pointing at the wrong _genHistory index. Clear actually has to
+    // empty the list, not just hide its container.
+    sc.style.display = 'none';
+    list.innerHTML = '';
+    list.style.maxHeight = '';
+    _ghRendered = 0;
+    return;
+  }
   sc.style.display = '';
   if (_genHistory.length > GH_VISIBLE) {
     list.style.maxHeight = (GH_ITEM_H * GH_VISIBLE) + 'px';

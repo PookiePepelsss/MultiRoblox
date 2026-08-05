@@ -535,17 +535,15 @@ pub async fn roblox_get_json(state: State<'_, AppState>, url: String) -> Result<
     crate::roblox_api::get_json_public(&state, &url).await
 }
 
-// Presence check for the blue ("in the app") vs green ("in a game") account
-// card distinction. One request covers every currently-launched account --
-// any one of their cookies can query presence for the whole batch, Roblox
-// doesn't require the querying account to be in the list.
+// Resolves a username to a "placeId:jobId" target string, which the launch
+// path already understands as "join this exact running server".
 #[tauri::command]
-pub async fn roblox_in_game_ids(
+pub async fn roblox_follow_user(
     state: State<'_, AppState>,
     cookie: String,
-    user_ids: Vec<i64>,
-) -> Result<Vec<i64>, String> {
-    crate::roblox_api::get_in_game_user_ids(&state, &cookie, &user_ids).await
+    username: String,
+) -> Result<Value, String> {
+    crate::roblox_api::follow_user_target(&state, &cookie, &username).await
 }
 
 #[tauri::command]

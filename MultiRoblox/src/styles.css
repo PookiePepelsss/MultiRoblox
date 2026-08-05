@@ -179,19 +179,13 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 /* Launched dots get a soft pulsing ring via a pseudo-element animated with
    transform+opacity only (GPU-composited, no per-frame repaint). Idle dots stay
    static - this keeps idle CPU near zero even with many accounts on screen. */
-/* Blue: the process is up (do_launch got a PID). Green: presence-confirmed
-   actually in a game, not just sitting on the Roblox menu/loading screen --
-   .in-game only ever gets added on top of .launched, never instead of it, so
-   the compound selector's higher specificity is what makes green win. */
-.card-dot.launched{background:var(--blue)}
-.card-dot.launched::after{content:'';position:absolute;inset:0;border-radius:50%;background:var(--blue);opacity:.5;transform:scale(1);animation:dot-ring 1.8s ease-out infinite;will-change:transform,opacity}
-.card-dot.launched.in-game{background:var(--green)}
-.card-dot.launched.in-game::after{background:var(--green)}
+/* Green whenever the instance is up -- no separate in-app vs in-game state. */
+.card-dot.launched{background:var(--green)}
+.card-dot.launched::after{content:'';position:absolute;inset:0;border-radius:50%;background:var(--green);opacity:.5;transform:scale(1);animation:dot-ring 1.8s ease-out infinite;will-change:transform,opacity}
 @keyframes dot-ring{0%{transform:scale(1);opacity:.5}70%,100%{transform:scale(2.6);opacity:0}}
 @media (prefers-reduced-motion:reduce){.card-dot.launched::after{animation:none;display:none}}
 .card-av{width:56px;height:56px;border-radius:10px;background:var(--s3);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:600;margin-bottom:14px;overflow:hidden;flex-shrink:0;box-shadow:0 0 0 2px var(--bg),0 0 0 3px rgba(150,152,162,.5);transition:box-shadow var(--dur) var(--smooth)}
-.card.is-live .card-av{box-shadow:0 0 0 2px var(--bg),0 0 0 3px var(--blue)}
-.card.is-live.in-game .card-av{box-shadow:0 0 0 2px var(--bg),0 0 0 3px var(--green)}
+.card.is-live .card-av{box-shadow:0 0 0 2px var(--bg),0 0 0 3px var(--green)}
 .card-av img{width:100%;height:100%;object-fit:cover}
 .card-name-row{display:flex;align-items:center;gap:6px;min-width:0;margin-bottom:4px}
 .card-name{font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0;min-width:0;letter-spacing:-.02em}
