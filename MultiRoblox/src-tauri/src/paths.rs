@@ -1,4 +1,4 @@
-// Hardcoded to match the old Electron build's userData path -- Tauri's
+// Hardcoded to match the old Electron build's userData path; Tauri's
 // default app_data_dir() would pick a different folder and orphan existing
 // users' saved data on upgrade.
 use std::path::PathBuf;

@@ -55,9 +55,6 @@
     <button class="nav-item" id="nav-logs" onclick="goTo('logs')">
       <span class="material-icons-round">terminal</span>Logs
     </button>
-    <button class="nav-item" id="nav-credits" onclick="goTo('credits')">
-      <span class="material-icons-round">favorite</span>Credits
-    </button>
     <div class="nav-spacer"></div>
     <button class="btn btn-danger kill-roblox-btn" id="nav-kill" onclick="mixKillAll()">
       <span class="material-icons-round" style="font-size:15px">power_settings_new</span>Kill Roblox
@@ -448,35 +445,44 @@
         </div>
         <div class="sw" id="stab-panel-roblox" style="display:none">
           <div class="sc">
-            <div class="sc-head">Deployment Channel</div>
+            <div class="sc-head">Roblox Version</div>
             <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
-              <div class="sr-left" style="width:100%"><div class="sr-label">Channel</div><div class="sr-desc">Which Roblox deployment channel to launch. Production is the normal LIVE client everyone gets.</div></div>
+              <div class="sr-left" style="width:100%"><div class="sr-label">Version</div><div class="sr-desc">Which Roblox version to launch. Current tracks the live build; Custom uses one you installed below.</div></div>
               <div class="cdd" id="cdd-channel" style="width:100%">
-                <div class="cdd-trigger" id="cdd-channel-trigger" onclick="toggleCdd('channel')" role="button" tabindex="0" aria-label="Roblox channel">
-                  <span class="cdd-label" id="cdd-channel-label">Production (LIVE)</span>
+                <div class="cdd-trigger" id="cdd-channel-trigger" onclick="toggleCdd('channel')" role="button" tabindex="0" aria-label="Roblox version">
+                  <span class="cdd-label" id="cdd-channel-label">Current</span>
                   <span class="material-icons-round cdd-arrow">expand_more</span>
                 </div>
                 <div class="cdd-menu" id="cdd-channel-menu">
-                  <div class="cdd-option selected" data-value="" onclick="setRobloxChannel('')" role="button" tabindex="0">
-                    <div class="cdd-opt-left"><div class="cdd-opt-name">Production (LIVE)</div><div class="cdd-opt-desc">The normal, stable channel everyone gets</div></div>
+                  <div class="cdd-option selected" data-value="current" onclick="setRobloxChannel('current')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">Current</div><div class="cdd-opt-desc">The live version everyone is on right now</div></div>
                     <span class="material-icons-round cdd-check">check</span>
                   </div>
-                  <div class="cdd-option" data-value="zcanary" onclick="setRobloxChannel('zcanary')" role="button" tabindex="0">
-                    <div class="cdd-opt-left"><div class="cdd-opt-name">Canary</div><div class="cdd-opt-desc">Roblox's early test channel, less stable</div></div>
-                    <span class="material-icons-round cdd-check">check</span>
-                  </div>
-                  <div class="cdd-option" data-value="zintegration" onclick="setRobloxChannel('zintegration')" role="button" tabindex="0">
-                    <div class="cdd-opt-left"><div class="cdd-opt-name">Integration</div><div class="cdd-opt-desc">Roblox's internal test channel, least stable</div></div>
-                    <span class="material-icons-round cdd-check">check</span>
-                  </div>
-                  <div class="cdd-option" data-value="znext" onclick="setRobloxChannel('znext')" role="button" tabindex="0">
-                    <div class="cdd-opt-left"><div class="cdd-opt-name">Next</div><div class="cdd-opt-desc">Roblox's upcoming-features preview channel</div></div>
+                  <div class="cdd-option" data-value="custom" onclick="setRobloxChannel('custom')" role="button" tabindex="0">
+                    <div class="cdd-opt-left"><div class="cdd-opt-name">Custom</div><div class="cdd-opt-desc">A specific version hash you enter below</div></div>
                     <span class="material-icons-round cdd-check">check</span>
                   </div>
                 </div>
               </div>
             </div>
-            <div class="sr"><div class="sr-left"><div class="sr-label">Lock channel</div><div class="sr-desc">Always launches the channel above, and refuses to launch a locally installed build that isn't on it. Off just runs whatever's newest on disk.</div></div><label class="toggle"><input type="checkbox" id="set-lockchannel" onchange="toggleLockChannel()"/><span class="toggle-trk"></span></label></div>
+            <div class="sr" id="rdd-row" style="flex-direction:column;align-items:flex-start;gap:10px">
+              <div class="sr-left" style="width:100%"><div class="sr-label">Install a version</div><div class="sr-desc">Downloads the build for a version hash from Roblox's CDN and installs it, the same packages RDD fetches.</div></div>
+              <div style="display:flex;gap:8px;width:100%">
+                <input type="text" id="set-verhash" class="sr-input" placeholder="version-0123456789abcdef" aria-label="Roblox version hash" style="flex:1;width:auto;font-family:'JetBrains Mono',monospace;font-size:12px" onkeydown="if(event.key==='Enter')rddInstall()"/>
+                <button class="btn btn-primary" id="rdd-btn" style="flex-shrink:0" onclick="rddInstall()">
+                  <span class="material-icons-round" style="font-size:15px">download</span><span>Install</span>
+                </button>
+              </div>
+              <div style="background:var(--s3);border-radius:4px;height:5px;overflow:hidden;width:100%;display:none" id="rdd-bar-wrap">
+                <div id="rdd-bar" style="height:100%;background:var(--ac);width:0%;transition:width .25s;border-radius:4px"></div>
+              </div>
+              <div class="sr-desc" id="rdd-status">Paste a version hash to download and install it.</div>
+            </div>
+            <div class="sr" style="flex-direction:column;align-items:flex-start;gap:8px">
+              <div class="sr-left" style="width:100%"><div class="sr-label">Installed versions</div><div class="sr-desc">Every Roblox build on this machine. Selecting one makes it the version launches use.</div></div>
+              <div id="rdd-list" style="width:100%"></div>
+            </div>
+            <div class="sr"><div class="sr-left"><div class="sr-label">Lock version</div><div class="sr-desc">Always launches the version above, and refuses to launch a locally installed build that isn't on it. Off just runs whatever's newest on disk.</div></div><label class="toggle"><input type="checkbox" id="set-lockchannel" onchange="toggleLockChannel()"/><span class="toggle-trk"></span></label></div>
           </div>
         </div>
         <div class="sw" id="stab-panel-privacy" style="display:none">
@@ -660,32 +666,6 @@
           <div class="logs-empty"><span class="material-icons-round">terminal</span>No log entries yet.</div>
         </div>
       </div>
-      <div class="page" id="page-credits">
-        <div class="ph">
-          <div class="ph-title">Credits</div>
-          <div class="ph-sub">The people behind MultiRoblox.</div>
-        </div>
-        <div class="sw">
-          <div class="credits-list">
-            <div class="credit-card">
-              <div class="credit-av" id="credit-av-pookiepepelss" data-discord-id="1411269394683658270">P</div>
-              <div class="credit-info">
-                <div class="credit-role">Lead Developer</div>
-                <div class="credit-name">pookiepepelss</div>
-              </div>
-              <div class="credit-discord"><span class="material-icons-round">alternate_email</span>pookiepepelss</div>
-            </div>
-            <div class="credit-card">
-              <div class="credit-av" id="credit-av-xern" data-discord-id="1376700787878531167">X</div>
-              <div class="credit-info">
-                <div class="credit-role">Co-Developer</div>
-                <div class="credit-name">xern</div>
-              </div>
-              <div class="credit-discord"><span class="material-icons-round">alternate_email</span>xernmc</div>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   </main>
 </div>
@@ -742,14 +722,28 @@
     <div id="login-panel-choose">
       <div class="modal-sub" style="margin-bottom:14px">How would you like to sign in?</div>
       <div style="display:flex;flex-direction:column;gap:8px">
-        <button class="btn btn-primary" style="justify-content:flex-start;gap:10px;padding:10px 14px" onclick="startBrowserLogin()">
+        <button class="btn btn-primary" style="justify-content:flex-start;gap:10px;padding:10px 14px;border:1px solid transparent" onclick="startBrowserLogin()">
           <span class="material-icons-round" style="font-size:16px">language</span>
           <span><span style="font-weight:600">Sign in with Roblox</span><span style="font-weight:400;opacity:.6;margin-left:8px;font-size:11.5px">Opens the Roblox login page</span></span>
+        </button>
+        <button class="btn btn-ghost" style="justify-content:flex-start;gap:10px;padding:10px 14px;border:1px solid var(--bd)" onclick="showCredsPanel()">
+          <span class="material-icons-round" style="font-size:16px">password</span>
+          <span><span style="font-weight:600">Username &amp; Password</span><span style="font-weight:400;opacity:.6;margin-left:8px;font-size:11.5px">Signs in for you</span></span>
         </button>
         <button class="btn btn-ghost" style="justify-content:flex-start;gap:10px;padding:10px 14px;border:1px solid var(--bd)" onclick="showCookiePanel()">
           <span class="material-icons-round" style="font-size:16px">vpn_key</span>
           <span><span style="font-weight:600">Paste Cookie</span><span style="font-weight:400;opacity:.6;margin-left:8px;font-size:11.5px">Use your .ROBLOSECURITY cookie</span></span>
         </button>
+      </div>
+    </div>
+    <!-- Step 2c: username & password -->
+    <div id="login-panel-creds" style="display:none">
+      <div class="modal-sub" style="margin-bottom:12px">Enter the account's username and password. Both are saved encrypted.</div>
+      <div class="field" style="margin-bottom:8px">
+        <input type="text" id="creds-username" placeholder="Username" aria-label="Roblox username" onkeydown="if(event.key==='Enter')document.getElementById('creds-password').focus()"/>
+      </div>
+      <div class="field" style="margin-bottom:4px">
+        <input type="password" id="creds-password" placeholder="Password" aria-label="Roblox password" onkeydown="if(event.key==='Enter')addByCreds()"/>
       </div>
     </div>
     <!-- Step 2a: browser login waiting -->
@@ -784,6 +778,9 @@
       <button class="btn btn-ghost" onclick="cancelLogin()">Cancel</button>
       <button class="btn btn-primary" id="btn-cookie-add" style="display:none" onclick="addByCookie()">
         <span class="material-icons-round" style="font-size:15px">check</span>Add Account
+      </button>
+      <button class="btn btn-primary" id="btn-creds-add" style="display:none" onclick="addByCreds()">
+        <span class="material-icons-round" style="font-size:15px">login</span>Sign In
       </button>
     </div>
   </div>

@@ -14,8 +14,8 @@ pub struct AppState {
     pub cached_legacy_key: Mutex<Option<[u8; 32]>>,
 
     // The one resident RobloxNative.exe (see helper.rs). It replaces what used
-    // to be a separate child per concern -- mutex holder, anti-AFK, PID
-    // watcher -- plus a fresh one-shot process per launch for closehandles and
+    // to be a separate child per concern: mutex holder, anti-AFK, PID
+    // watcher; plus a fresh one-shot process per launch for closehandles and
     // per slider move for volume.
     pub helper: tokio::sync::Mutex<Option<Arc<crate::helper::Helper>>>,
     pub helper_child: Mutex<Option<Child>>,
@@ -48,12 +48,12 @@ impl AppState {
     pub fn new(app_handle: AppHandle) -> Self {
         Self {
             app_handle,
-            // connect_timeout only -- deliberately NOT a whole-request
+            // connect_timeout only; deliberately NOT a whole-request
             // timeout. A host that blackholes packets (firewall drop, dead
             // DNS) otherwise leaves a connect attempt hanging indefinitely,
             // and callers that aren't individually timeout-wrapped just stop.
             // A request timeout would cap the whole exchange including the
-            // body, which would break the Chrome download in login.rs -- it
+            // body, which would break the Chrome download in login.rs; it
             // streams a several-hundred-MB zip through this same client.
             http: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(15))

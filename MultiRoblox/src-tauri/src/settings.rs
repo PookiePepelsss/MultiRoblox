@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 // Unparseable settings are backed up rather than silently ignored: dropping
 // keyVerifier/kdfSalt makes the app forget a passphrase was ever set and offer
 // to create a new one, which rotates the salt and orphans every gs:-encrypted
-// cookie. Writes stay allowed here (unlike accounts) -- blocking them would
+// cookie. Writes stay allowed here (unlike accounts); blocking them would
 // leave enc_set_key re-encrypting accounts under a key whose verifier never
 // reached disk, which is a worse outcome than a reset config.
 pub fn load_settings() -> Map<String, Value> {

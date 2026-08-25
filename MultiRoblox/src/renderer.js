@@ -180,7 +180,7 @@ async function init() {
   await continueInit();
 }
 
-// Decrypt failure is itself proof a cookie is unusable -- flag it instantly
+// Decrypt failure is itself proof a cookie is unusable; flag it instantly
 // (no network round-trip needed) instead of waiting on recheckAllCookies.
 function flagInvalidCookies(list) {
   for (const a of list) {
@@ -228,8 +228,8 @@ async function continueInit() {
   api.onRobloxCount(n => { _lastCountPushAt = Date.now(); _mixRunning = n; setRunningBadges(n); });
 
   // Fires the moment the process actually exists (see native.rs do_launch),
-  // instead of waiting on the whole launch call -- CSRF fetch, auth ticket,
-  // inter-launch stagger, trailing bookkeeping -- to resolve back to the
+  // instead of waiting on the whole launch call: CSRF fetch, auth ticket,
+  // inter-launch stagger, trailing bookkeeping; to resolve back to the
   // caller. markLaunched() is idempotent, so the doLaunch() success path
   // below calling it again once its own await resolves is harmless.
   api.onRobloxStarted(id => markLaunched(id));
@@ -324,7 +324,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function detectRobloxVersion() {
   try {
-    const ver = await api.getRobloxVersion(settings.lockChannel ? settings.robloxChannel : '');
+    const ver = await api.getRobloxVersion(settings.lockChannel ? (settings.robloxChannel || 'current') : 'current');
     if (ver) {
       // Show full hash in titlebar badge, also update settings stat
       document.getElementById('tb-roblox-ver').textContent = ver;
@@ -391,7 +391,16 @@ function applySettings() {
   if (lowPriority) lowPriority.checked = settings.lowPriorityMultiInstance !== false;
   const lockChannel = document.getElementById('set-lockchannel');
   if (lockChannel) lockChannel.checked = !!settings.lockChannel;
-  robloxChannelUpdateUI(settings.robloxChannel || '');
+  robloxChannelUpdateUI(['current','custom'].includes(settings.robloxChannel) ? settings.robloxChannel : 'current');
+  const vh = document.getElementById('set-verhash');
+  if (vh) vh.value = settings.customVersion || '';
+  rddRowUpdate();
+  rddRenderList();
+  api.onRddProgress(p => {
+    const bar = document.getElementById('rdd-bar');
+    if (bar && p.total) bar.style.width = Math.round((p.done / p.total) * 100) + '%';
+    rddSetStatus(p.message === 'Done' ? 'Finishing...' : ('Downloading ' + p.message + ' (' + (p.done + 1) + '/' + p.total + ')'), '');
+  });
 }
 
 let _acctQuery = '', _acctFilter = (() => { try { const f = localStorage.getItem('mr-acct-filter'); return (f && f !== 'running' && f !== 'idle') ? f : 'all'; } catch { return 'all'; } })(), _acctView = (() => { try { return localStorage.getItem('mr-acct-view') === 'list' ? 'list' : 'grid'; } catch { return 'grid'; } })();
@@ -462,7 +471,7 @@ function antiAfkIntervalCommit() {
   toast('Anti-AFK interval: ' + mins + ' min', 'ok');
 }
 
-// Silent trim -- no toast/button spinner, just logs. Skips the tasklist
+// Silent trim; no toast/button spinner, just logs. Skips the tasklist
 // round-trip entirely when nothing is running.
 let _autoTrimTimer = null;
 async function _autoTrimTick() {
@@ -557,7 +566,7 @@ function refreshAllSliderFills() {
 
 // Segments aren't equal width, so the pill's left/width are computed in
 // real pixels from the active button's own rect rather than assumed from
-// index -- this is also what lets one CSS rule work for both tab bars
+// index; this is also what lets one CSS rule work for both tab bars
 // (Settings' 6 segments and Charts' 3) without hardcoding either count.
 function positionTabSlider(barEl) {
   if (!barEl) return;
@@ -573,7 +582,7 @@ function positionTabSlider(barEl) {
   if (isNew) slider.style.transition = 'none';
   // offsetLeft/offsetWidth, not getBoundingClientRect: they're relative to
   // the padding edge of the nearest positioned ancestor (here, barEl itself,
-  // since both are its direct children) -- exactly what CSS `left` on an
+  // since both are its direct children); exactly what CSS `left` on an
   // absolutely-positioned sibling measures from. getBoundingClientRect
   // instead gives the border-box's outer edge, so subtracting two of those
   // was off by the bar's own border-width in every direction: a small,
@@ -586,7 +595,7 @@ function positionTabSlider(barEl) {
     slider.style.transition = '';
   }
 }
-// Same technique as positionTabSlider, vertical instead of horizontal -- nav
+// Same technique as positionTabSlider, vertical instead of horizontal; nav
 // items are flex-stacked with gaps rather than a fixed row height, so top/
 // height come from the active item's measured rect, not an assumed index.
 function positionNavSlider() {
@@ -602,7 +611,7 @@ function positionNavSlider() {
   const active = bar.querySelector('.nav-item.active');
   if (!active) { slider.style.opacity = '0'; return; }
   if (isNew) slider.style.transition = 'none';
-  // See positionTabSlider's comment -- offsetTop/offsetHeight, not
+  // See positionTabSlider's comment; offsetTop/offsetHeight, not
   // getBoundingClientRect, for the same padding-edge-vs-border-edge reason.
   slider.style.top = active.offsetTop + 'px';
   slider.style.height = active.offsetHeight + 'px';
@@ -641,7 +650,7 @@ function goTo(p) {
   if (p === 'settings') {
     document.getElementById('stat-count').textContent = accounts.length;
     refreshMultiStatus();
-    // Covers landing here without ever clicking a tab -- the default-active
+    // Covers landing here without ever clicking a tab; the default-active
     // tab still needs the pill positioned under it at least once.
     positionTabSlider(document.getElementById('stab-general')?.closest('.tab-bar'));
   }
@@ -717,8 +726,8 @@ function showCardMenu(id, x, y) {
 const CTX_EDGE_GAP = 8;
 
 // Keeps the menu (and its submenu) fully on screen. Previously this assumed a
-// 200px-wide menu and only clamped the far edge, so a menu wider than that --
-// the width grows with the account name and the "Set priority" row -- still
+// 200px-wide menu and only clamped the far edge, so a menu wider than that
+// (the width grows with the account name and the "Set priority" row) still
 // ran off the right, and a clamp that went negative pushed the top of the menu
 // above the viewport where it couldn't be reached.
 function positionCardMenu(menu, x, y) {
@@ -743,7 +752,7 @@ function positionCardMenu(menu, x, y) {
 }
 
 // The priority submenu opens to the right at left:100%. Near the right edge
-// that put it entirely outside the window -- the row highlighted on hover but
+// that put it entirely outside the window; the row highlighted on hover but
 // nothing appeared, which is the "menu goes invisible" case. It's laid out
 // (opacity:0, not display:none), so it can be measured before it's shown.
 function positionCardSubmenu(menu, vw, vh) {
@@ -1265,16 +1274,19 @@ document.addEventListener('mouseout', e => {
 window.addEventListener('scroll', hideAvTip, true);
 
 function _showPanel(panel) {
-  ['choose','cookie','browser'].forEach(p => {
+  ['choose','cookie','browser','creds'].forEach(p => {
     document.getElementById('login-panel-' + p).style.display = p === panel ? '' : 'none';
   });
   document.getElementById('btn-cookie-add').style.display = panel === 'cookie' ? '' : 'none';
+  document.getElementById('btn-creds-add').style.display = panel === 'creds' ? '' : 'none';
   document.getElementById('btn-login-back').style.display = panel === 'choose' ? 'none' : '';
   setStatus('login-status', 'hidden', '');
 }
 
 function openLogin() {
   document.getElementById('cookie-input').value = '';
+  document.getElementById('creds-username').value = '';
+  document.getElementById('creds-password').value = '';
   _showPanel('choose');
   openModal('m-login');
 }
@@ -1282,6 +1294,41 @@ function openLogin() {
 function showCookiePanel() {
   _showPanel('cookie');
   setTimeout(() => document.getElementById('cookie-input').focus(), 50);
+}
+
+function showCredsPanel() {
+  _showPanel('creds');
+  setTimeout(() => document.getElementById('creds-username').focus(), 50);
+}
+
+// Drives the real Roblox login page with the given credentials rather than
+// storing them as a login method; the cookie that comes back is minted for
+// this machine's IP, which is what keeps it from being invalidated instantly.
+async function addByCreds() {
+  const username = document.getElementById('creds-username').value.trim();
+  const password = document.getElementById('creds-password').value;
+  if (!username || !password) {
+    setStatus('login-status', 'err', '<span class="material-icons-round">error_outline</span>Enter both a username and a password');
+    return;
+  }
+  const btn = document.getElementById('btn-creds-add');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spin"></div>Signing in';
+  setStatus('login-status', 'load', '<div class="spin"></div>Signing in…');
+  let res;
+  try {
+    res = await api.loginWithCredentials(username, password);
+  } catch (e) {
+    res = { success: false, error: (e && e.message) || 'Login failed' };
+  }
+  btn.disabled = false;
+  btn.innerHTML = '<span class="material-icons-round" style="font-size:15px">login</span>Sign In';
+  if (!document.getElementById('m-login').classList.contains('open')) return;
+  if (!res || !res.success) {
+    setStatus('login-status', 'err', '<span class="material-icons-round">error_outline</span>' + esc((res && res.error) || 'Login failed'));
+    return;
+  }
+  await finishLogin(res);
 }
 
 function backToChoose() {
@@ -1368,7 +1415,7 @@ function openEdit(id) {
   document.getElementById('in-nickname').value = editAcc.nickname || '';
   document.getElementById('in-description').value = editAcc.description || '';
   document.getElementById('in-target').value = editAcc.gameTarget || '';
-  // Reset follow field/status -- it's a lookup tool, not a saved value.
+  // Reset follow field/status; it's a lookup tool, not a saved value.
   document.getElementById('in-follow').value = '';
   followSetStatus("Finds the server they're in and fills the target above.", '');
   openModal('m-edit');
@@ -1382,7 +1429,7 @@ function followSetStatus(msg, kind) {
   el.style.color = kind === 'err' ? 'var(--red)' : (kind === 'ok' ? 'var(--green)' : '');
 }
 
-// Uses this account's own cookie for the lookup -- presence/username APIs both
+// Uses this account's own cookie for the lookup; presence/username APIs both
 // need an authenticated session, and the account being edited is the one that
 // would do the joining anyway.
 async function followUserLookup() {
@@ -1399,7 +1446,7 @@ async function followUserLookup() {
   try {
     const res = await api.followUser(editAcc.cookie, username);
     document.getElementById('in-target').value = res.target;
-    followSetStatus('Found ' + res.username + " -- target set, click Save to keep it.", 'ok');
+    followSetStatus('Found ' + res.username + ": target set, click Save to keep it.", 'ok');
   } catch (e) {
     followSetStatus(typeof e === 'string' ? e : (e.message || 'Lookup failed'), 'err');
   } finally {
@@ -1434,7 +1481,7 @@ function confirmAction(message, onConfirm) {
   btn.parentNode.replaceChild(newBtn, btn);
   newBtn.addEventListener('click', () => { closeModal('m-confirm-delete'); onConfirm(); });
   // All overlays share the same z-index, so equal-z stacking falls back to
-  // DOM order -- moving this to the end of <body> guarantees it renders on
+  // DOM order; moving this to the end of <body> guarantees it renders on
   // top even when triggered from inside another already-open modal (e.g.
   // "Clear data" on the encryption lock screen), instead of silently
   // rendering underneath it.
@@ -1469,7 +1516,7 @@ async function clearAll() {
     api.savePackages(packages);
     renderPackages();
     // The generator history holds usernames, passwords and cookies of its own,
-    // so "remove all saved accounts and sign-in data" has to take it too --
+    // so "remove all saved accounts and sign-in data" has to take it too;
     // otherwise the most sensitive records survive the wipe.
     if (genCount) {
       _genHistory = [];
@@ -1524,6 +1571,11 @@ async function doLaunch() {
   _launchingId = launchAcc.id;
   btn.disabled = true; btn.innerHTML = '<div class="spin"></div>Launching';
   setStatus('launch-status', 'load', '<div class="spin"></div>Getting auth ticket\u2026');
+  // Flip to "Spawning" the instant Roblox's process exists (before the IPC response returns)
+  let _unlistenStarted;
+  api.onRobloxStarted(id => {
+    if (id === launchAcc.id) setStatus('launch-status', 'load', '<div class="spin"></div>Roblox is starting\u2026');
+  }).then(u => { _unlistenStarted = u; });
   logEntry('info', 'launch', `Launching Roblox for ${launchAcc.username || launchAcc.id}...`, { accountId: launchAcc.id, username: launchAcc.username, userId: launchAcc.userId, target: launchAcc.gameTarget || 'Roblox home' });
   let res;
   try {
@@ -1535,6 +1587,7 @@ async function doLaunch() {
     res = { success: false, error: e?.message || String(e) };
   }
   _launchingId = null;
+  if (_unlistenStarted) { try { _unlistenStarted(); } catch {} }
   if (res.cancelled) {
     // The user already asked for this and the modal is closing - don't shout
     // an error at them on the way out.
@@ -1697,7 +1750,7 @@ async function launchPackage(id) {
   const card = document.querySelector('.pkg-card[data-id="' + id + '"]');
   const btn = card ? card.querySelector('.pkg-launch-btn') : null;
   const killBtn = card ? card.querySelector('.pkg-kill-btn') : null;
-  // launchPackage/killPackage share the same progress chips -- block one while the other runs.
+  // launchPackage/killPackage share the same progress chips; block one while the other runs.
   if (btn && btn.dataset.busy === '1') return;
   if (killBtn && killBtn.dataset.busy === '1') { toast('A kill is already in progress for this group', 'err'); return; }
   if (btn) btn.dataset.busy = '1';
@@ -1828,7 +1881,7 @@ function toast(msg, type) {
 }
 
 // Defaults multi-instance on for a fresh install, but leaves an explicit
-// `false` alone -- this used to force it back on every time the Settings page
+// `false` alone; this used to force it back on every time the Settings page
 // was opened, so the setting could never stay off.
 async function refreshMultiStatus() {
   const s = await api.multiInstanceStatus();
@@ -2256,7 +2309,7 @@ async function mixWriteFlag(key, value) {
 }
 
 // ── Rendering engine (Settings > Performance) ────────────────────────────
-// D3D9 removed -- Roblox dropped that render path, forcing it now crashes
+// D3D9 removed; Roblox dropped that render path, forcing it now crashes
 // the client with a missing-DLL error instead of falling back.
 const RENDER_ENGINE_FLAGS = {
   d3d11: 'FFlagDebugGraphicsPreferD3D11',
@@ -2268,7 +2321,7 @@ const RENDER_ENGINE_LABELS = { '': 'Automatic', d3d11: 'Direct3D 11', opengl: 'O
 async function renderEngineInit() {
   let flags = {};
   try { flags = (await api.readFFlags()) || {}; } catch {}
-  // Purge a stale D3D9 flag from before it was removed -- forcing it now
+  // Purge a stale D3D9 flag from before it was removed; forcing it now
   // crashes the client on launch instead of degrading gracefully.
   if ('FFlagDebugGraphicsPreferD3D9' in flags) {
     delete flags['FFlagDebugGraphicsPreferD3D9'];
@@ -2300,23 +2353,129 @@ async function setRenderEngine(engine) {
 }
 
 // ── Roblox deployment channel (Settings > Roblox) ─────────────────────────
-const ROBLOX_CHANNEL_LABELS = { '': 'Production (LIVE)', zcanary: 'Canary', zintegration: 'Integration', znext: 'Next' };
+const ROBLOX_CHANNEL_LABELS = { current: 'Current', custom: 'Custom' };
 
 function robloxChannelUpdateUI(channel) {
   const label = document.getElementById('cdd-channel-label');
-  if (label) label.textContent = ROBLOX_CHANNEL_LABELS[channel] || 'Production (LIVE)';
+  if (label) label.textContent = ROBLOX_CHANNEL_LABELS[channel] || 'Current';
   document.querySelectorAll('#cdd-channel-menu .cdd-option').forEach(o =>
-    o.classList.toggle('selected', o.dataset.value === channel));
+    o.classList.toggle('selected', o.dataset.value === (channel || 'current')));
 }
 
 function setRobloxChannel(channel) {
   settings.robloxChannel = channel;
   api.saveSettings({ robloxChannel: channel });
   robloxChannelUpdateUI(channel);
+  rddRowUpdate();
   closeAllCdd();
-  toast('Roblox channel: ' + (ROBLOX_CHANNEL_LABELS[channel] || 'Production (LIVE)') + (settings.lockChannel ? '' : ' (enable Lock channel to apply)'), 'ok');
+  toast('Roblox version: ' + (ROBLOX_CHANNEL_LABELS[channel] || 'Current') + (settings.lockChannel ? '' : ' (enable Lock version to apply)'), 'ok');
   if (settings.lockChannel) detectRobloxVersion();
 }
+
+// The install/pick UI only matters for the Custom option; Current
+// resolves its hash from WEAO instead.
+function rddRowUpdate() {
+  const row = document.getElementById('rdd-row');
+  if (row) row.style.display = settings.robloxChannel === 'custom' ? '' : 'none';
+}
+
+function normalizeVerHash(v) {
+  let h = (v || '').trim();
+  if (!h) return '';
+  if (!h.startsWith('version-')) h = 'version-' + h;
+  return /^version-[0-9a-f]{16}$/i.test(h) ? h.toLowerCase() : null;
+}
+
+function rddSetStatus(msg, kind) {
+  const el = document.getElementById('rdd-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = kind === 'err' ? 'var(--red)' : (kind === 'ok' ? 'var(--green)' : '');
+}
+
+// Downloads and unpacks the build for a hash into Roblox's Versions folder.
+// Progress arrives as rdd:progress events from the Rust side, one per package.
+async function rddInstall() {
+  const h = normalizeVerHash(document.getElementById('set-verhash').value);
+  if (!h) { rddSetStatus('Enter a version hash (16 hex characters).', 'err'); return; }
+  const btn = document.getElementById('rdd-btn');
+  const label = btn ? btn.querySelector('span:last-child') : null;
+  const wrap = document.getElementById('rdd-bar-wrap');
+  if (btn) { btn.disabled = true; if (label) label.textContent = 'Installing'; }
+  if (wrap) wrap.style.display = '';
+  rddSetStatus('Starting...', '');
+  try {
+    const r = await api.rddInstall(h);
+    rddSetStatus((r && r.alreadyInstalled) ? (h + ' is already installed.') : ('Installed ' + h + '.'), 'ok');
+    setRobloxVersionPick(h);
+  } catch (e) {
+    rddSetStatus(typeof e === 'string' ? e : (e.message || 'Install failed'), 'err');
+  } finally {
+    if (btn) { btn.disabled = false; if (label) label.textContent = 'Install'; }
+    if (wrap) wrap.style.display = 'none';
+    const bar = document.getElementById('rdd-bar');
+    if (bar) bar.style.width = '0%';
+  }
+}
+
+// Picking an installed build is what actually decides which client launches:
+// spawn_roblox_direct selects this exact version folder when Lock version is on.
+function setRobloxVersionPick(hash) {
+  settings.customVersion = hash;
+  api.saveSettings({ customVersion: hash });
+  const vh = document.getElementById('set-verhash');
+  if (vh) vh.value = hash;
+  rddRenderList();
+  if (settings.lockChannel && settings.robloxChannel === 'custom') detectRobloxVersion();
+}
+
+async function rddDelete(hash) {
+  if (!confirm('Delete ' + hash + ' from disk?')) return;
+  try {
+    await api.rddDeleteVersion(hash);
+    toast('Deleted ' + hash, 'ok');
+    if (settings.customVersion === hash) setRobloxVersionPick('');
+    else rddRenderList();
+  } catch (e) {
+    toast(typeof e === 'string' ? e : (e.message || 'Delete failed'), 'err');
+  }
+}
+
+async function rddRenderList() {
+  const list = document.getElementById('rdd-list');
+  if (!list) return;
+  let versions = [];
+  try { versions = await api.rddListVersions(); } catch {}
+  if (!versions.length) {
+    list.innerHTML = '<div class="sr-desc">No Roblox builds found on this machine.</div>';
+    return;
+  }
+  const sel = settings.customVersion || '';
+  const selLabel = versions.find(v => v.version === sel);
+  const triggerText = selLabel
+    ? esc(selLabel.version) + (selLabel.installedAt ? ' &nbsp;·&nbsp; ' + new Date(selLabel.installedAt).toLocaleDateString() : '')
+    : (versions.length ? 'Select a version' : 'No builds installed');
+  const opts = versions.map(v => {
+    const when = v.installedAt ? new Date(v.installedAt).toLocaleDateString() : '';
+    const isSelected = v.version === sel;
+    return '<div class="cdd-option' + (isSelected ? ' selected' : '') + '" data-value="' + esc(v.version) + '" role="button" tabindex="0"'
+      + ' onclick="setRobloxVersionPick(\'' + esc(v.version) + '\');closeAllCdd();rddRenderList()">'
+      + '<div class="cdd-opt-left"><div class="cdd-opt-name" style="font-family:\'JetBrains Mono\',monospace;font-size:11.5px">' + esc(v.version) + '</div>'
+      + (when ? '<div class="cdd-opt-desc">Installed ' + when + '</div>' : '')
+      + '</div>'
+      + '<span class="material-icons-round cdd-check">check</span>'
+      + '<button type="button" class="btn btn-ghost" title="Delete this version" onclick="event.stopPropagation();rddDelete(\'' + esc(v.version) + '\')" style="padding:0 6px;height:28px;margin-left:4px;flex-shrink:0"><span class="material-icons-round" style="font-size:14px">delete</span></button>'
+      + '</div>';
+  }).join('');
+  list.innerHTML = '<div class="cdd" id="cdd-rddver" style="width:100%">'
+    + '<div class="cdd-trigger" id="cdd-rddver-trigger" onclick="toggleCdd(\'rddver\')" role="button" tabindex="0" aria-label="Installed Roblox version">'
+    + '<span class="cdd-label" id="cdd-rddver-label" style="font-family:\'JetBrains Mono\',monospace;font-size:11.5px">' + triggerText + '</span>'
+    + '<span class="material-icons-round cdd-arrow">expand_more</span>'
+    + '</div>'
+    + '<div class="cdd-menu" id="cdd-rddver-menu">' + opts + '</div>'
+    + '</div>';
+}
+
 
 // Smoothly fill the slider track up to the current value.
 function updateSliderFill(el) {
@@ -2446,7 +2605,7 @@ function genToggleKey() {
 }
 
 // Literal values BloxGen's API expects for `type`, confirmed against their
-// own /api/prices response (which echoes these back as its object keys) --
+// own /api/prices response (which echoes these back as its object keys);
 // the docs only ever show these as human-readable labels in prose, and
 // guessing at slugs like "30day" instead would have silently 400'd.
 const GEN_TYPES = [
@@ -2516,9 +2675,7 @@ async function genCombo() {
     api.writeGenHistory(_genHistory).catch(() => {});
     _ghPrepend();
 
-    // Copy cookie to clipboard if available, else username:password
-    const toCopy = d.cookie || (d.username + ':' + d.password);
-    navigator.clipboard.writeText(toCopy).catch(() => {});
+    navigator.clipboard.writeText(d.username + ':' + d.password).catch(() => {});
 
     if (btn) { btn.disabled = false; if (btnLabel) btnLabel.textContent = 'Generate'; }
 
@@ -2563,7 +2720,7 @@ function genRenderHistory() {
   const sc = document.getElementById('gen-history-sc');
   if (!list || !sc) return;
   if (_genHistory.length === 0) {
-    // Hiding the section alone left old rows sitting in the DOM -- the next
+    // Hiding the section alone left old rows sitting in the DOM; the next
     // _ghPrepend() (on the very next Generate) would reveal the section
     // again with every "cleared" row still there, underneath the new one,
     // now pointing at the wrong _genHistory index. Clear actually has to
@@ -2663,16 +2820,17 @@ async function genHistAdd(i) {
 }
 
 async function genAddToAccounts() {
-  if (!_lastGenData || !_lastGenData.cookie) { toast('No cookie available', 'err'); return; }
+  if (!_lastGenData || !_lastGenData.username || !_lastGenData.password) { toast('No account to add', 'err'); return; }
   const btn = document.getElementById('gen-add-btn');
-  if (btn) { btn.disabled = true; }
+  const btnLabel = btn ? btn.querySelector('span:last-child') : null;
+  if (btn) { btn.disabled = true; if (btnLabel) btnLabel.textContent = 'Adding'; }
   try {
-    const res = await api.validateCookie(_lastGenData.cookie);
-    if (!res || !res.username) { toast('Cookie invalid or expired', 'err'); if(btn)btn.disabled=false; return; }
-    const a = await api.addAccount({ username: res.username, userId: res.userId, cookie: _lastGenData.cookie, gameTarget: '', nickname: '' });
-    if (a) { accounts.push(a); render(); toast('Added ' + res.username + ' to accounts!', 'ok'); }
-    if(btn)btn.disabled=false;
-  } catch(e) { toast('Failed: ' + e.message, 'err'); if(btn)btn.disabled=false; }
+    const r = await api.loginWithCredentials(_lastGenData.username, _lastGenData.password);
+    if (!r.success || !r.cookie) { toast(r.error || 'Login failed', 'err'); if (btn) { btn.disabled = false; if (btnLabel) btnLabel.textContent = 'add'; } return; }
+    const a = await api.addAccount({ username: r.username || _lastGenData.username, userId: r.userId || null, cookie: r.cookie, gameTarget: '', nickname: '' });
+    if (a) { accounts.push(a); render(); toast('Added ' + (r.username || _lastGenData.username) + ' to accounts!', 'ok'); }
+    if (btn) { btn.disabled = false; if (btnLabel) btnLabel.textContent = 'add'; }
+  } catch(e) { toast('Failed: ' + (e.message || e), 'err'); if (btn) { btn.disabled = false; if (btnLabel) btnLabel.textContent = 'add'; } }
 }
 
 // Tracked so a Generate right after Clear can wait for the clear's write to land first.

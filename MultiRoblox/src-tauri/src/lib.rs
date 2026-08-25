@@ -6,6 +6,7 @@ mod jsonfile;
 mod login;
 mod native;
 mod paths;
+mod rdd;
 mod roblox_api;
 mod settings;
 mod state;
@@ -35,7 +36,7 @@ pub fn run() {
             // Blocking I/O, kept off the async runtime's worker threads.
             std::thread::spawn(login::sweep_stale_login_profiles);
 
-            // Start the one and only RobloxNative.exe here, at app startup --
+            // Start the one and only RobloxNative.exe here, at app startup;
             // not lazily when an account launches. It stays up for the whole
             // session holding Roblox's singleton mutex, and everything else
             // (anti-AFK, PID watching, handle closing, volume, captures) is a
@@ -55,7 +56,7 @@ pub fn run() {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 // Defaults on, matching the previous unconditional hold. Only
-                // an explicit false releases it -- until now the setting was
+                // an explicit false releases it; until now the setting was
                 // read solely when toggled, so a saved `false` came back on at
                 // every restart.
                 let multi_instance = startup_settings
@@ -79,8 +80,8 @@ pub fn run() {
             // Safety net: the window is created with visible:false and normally
             // revealed by the frontend's show_main_window call once the DOM is
             // ready (see tauri-bridge.js). If the frontend fails to boot at all
-            // -- WebView2 hiccup, window.__TAURI__ not injected yet, any throw
-            // before the reveal runs -- that call never fires and the app just
+            // (WebView2 hiccup, window.__TAURI__ not injected yet, any throw
+            // before the reveal runs), that call never fires and the app just
             // sits there as an invisible background process with no way for the
             // user to recover. Force the window visible after a few seconds
             // regardless, so a broken frontend surfaces itself instead of
@@ -124,6 +125,9 @@ pub fn run() {
             commands::fps_read,
             commands::fps_write,
             commands::roblox_get_version,
+            commands::rdd_install,
+            commands::rdd_list_versions,
+            commands::rdd_delete_version,
             commands::roblox_validate_cookie,
             commands::roblox_set_volume,
             commands::roblox_kill_all,
@@ -140,6 +144,7 @@ pub fn run() {
             commands::roblox_launch,
             commands::roblox_launch_cancel,
             commands::roblox_open_login,
+            commands::roblox_login_with_credentials,
             commands::roblox_open_account_browser,
             commands::login_cancel,
             commands::open_external,
@@ -155,7 +160,7 @@ pub fn run() {
                 tauri::RunEvent::ExitRequested { api, .. } => {
                     // On Windows, closing a secondary WebviewWindow (e.g. the
                     // login webview) can fire ExitRequested even while the main
-                    // window is still alive -- a WebView2 WM_QUIT quirk. Prevent
+                    // window is still alive; a WebView2 WM_QUIT quirk. Prevent
                     // exit whenever the main window is still present; if the user
                     // closed the main window itself it's already destroyed here
                     // and we fall through to a normal exit.
@@ -168,7 +173,7 @@ pub fn run() {
                     // there's no runtime left to await on here, and deferring
                     // into a spawn would race the process actually exiting.
                     // Even if this somehow doesn't land, closing our end of
-                    // its stdin gives the daemon EOF and it exits itself --
+                    // its stdin gives the daemon EOF and it exits itself;
                     // which is also what covers a crash or a Task Manager
                     // kill, where none of this code runs at all.
                     let state = app_handle.state::<AppState>();

@@ -1,17 +1,10 @@
 // The single resident RobloxNative.exe for the whole app session.
 //
-// Previously every concern spawned its own helper process: `mutex` and
-// `antiafk` were resident, `watch` came and went with the watch loop, and
-// `closehandles`/`volume`/`pids`/`capture` were spawned one-shot -- the first
-// two on EVERY launch. That meant a variable number of RobloxNative.exe
-// processes, several of them short-lived, and any of them could outlive the
-// app if a kill signal raced app exit (kill() only signals; it doesn't wait).
-//
-// Now there is exactly one. It starts with MultiRoblox, holds the singleton
+// There is exactly one. It starts with MultiRoblox, holds the singleton
 // mutexes for the whole session, runs anti-AFK and the PID watcher on its own
 // background threads, and answers everything else as a request over a pipe.
 // It dies with MultiRoblox: explicitly on clean exit, and otherwise because
-// closing our end of its stdin gives it EOF -- which covers a crash or a
+// closing our end of its stdin gives it EOF; which covers a crash or a
 // Task Manager kill, where no shutdown code of ours would ever run.
 use crate::state::AppState;
 use std::collections::HashMap;
@@ -27,7 +20,7 @@ use tokio::sync::oneshot;
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Captures focus/restore a window and PNG-encode, so they need more headroom
-/// than a plain request -- matches the old one-shot capture timeout.
+/// than a plain request; matches the old one-shot capture timeout.
 pub const CAPTURE_TIMEOUT: Duration = Duration::from_secs(25);
 /// The handle-table scan can genuinely take seconds with many processes open.
 pub const SLOW_TIMEOUT: Duration = Duration::from_secs(30);
@@ -35,13 +28,13 @@ pub const SLOW_TIMEOUT: Duration = Duration::from_secs(30);
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, String>>>>>;
 
 /// Backoff after a spawn that failed for any reason other than "someone else
-/// already has one" -- stops a broken helper (missing .NET, AV quarantine)
+/// already has one"; stops a broken helper (missing .NET, AV quarantine)
 /// from being re-spawned on every status poll.
 const SPAWN_RETRY_BACKOFF_MS: i64 = 10_000;
 
 /// True when a helper owned by someone else (another MultiRoblox instance) is
 /// already running. Checked before spawning, because the daemon's own
-/// singleton guard can only reject a duplicate *after* it has been started --
+/// singleton guard can only reject a duplicate *after* it has been started;
 /// and the frontend polls status every 3s, so "spawn, get rejected, exit"
 /// would otherwise repeat forever. Opening the name is cheap and creates
 /// nothing, so this never disturbs the incumbent.
@@ -124,7 +117,7 @@ impl Helper {
 /// Returns the live helper, starting it if this is the first call (or if a
 /// previous one died). The async mutex is held across the whole spawn so two
 /// racing callers can't both get past the liveness check and start a second
-/// process -- which is the whole point of this module.
+/// process; which is the whole point of this module.
 ///
 /// Boxed rather than a plain `async fn` to break the type recursion: the
 /// spawned reader task calls back into `ensure` to restart a dead daemon, and
@@ -151,7 +144,7 @@ pub fn ensure<'a>(
         // a stray from a crashed session holds the singleton name too, and
         // checking before sweeping would treat our own leftovers as a live
         // owner and refuse to ever start. Sweeping also has to precede the
-        // extraction below -- a running stray holds that exe file open, so
+        // extraction below; a running stray holds that exe file open, so
         // the write would fail and leave an outdated helper on disk.
         if !state.helper_swept.swap(true, Ordering::SeqCst) {
             sweep_stray_helpers().await;
@@ -159,7 +152,7 @@ pub fn ensure<'a>(
         // Don't start one we know will be rejected. Callers degrade cleanly
         // (pids falls back to tasklist, the rest surface an error), and the
         // moment the other instance closes, the next poll picks the helper
-        // back up -- no restart of this app needed.
+        // back up; no restart of this app needed.
         if another_helper_running() {
             return None;
         }
@@ -174,7 +167,7 @@ pub fn ensure<'a>(
 }
 
 /// Bounds automatic restarts so no failure mode can turn into a respawn
-/// storm -- the same shape as the launcher's own auto-relaunch throttle.
+/// storm; the same shape as the launcher's own auto-relaunch throttle.
 const RESTART_MAX: usize = 5;
 const RESTART_WINDOW_MS: i64 = 5 * 60 * 1000;
 
@@ -256,7 +249,7 @@ async fn spawn(app: &AppHandle, state: &AppState, exe: &Path) -> Option<Arc<Help
                 Ok(Some(line)) => {
                     let line = line.trim_end();
                     if let Some(rest) = line.strip_prefix("R|") {
-                        // R|<id>|OK|<payload> -- payload may contain anything
+                        // R|<id>|OK|<payload>: payload may contain anything
                         // except a newline, so only split off the first three.
                         let mut it = rest.splitn(3, '|');
                         let id = it.next().and_then(|s| s.parse::<u64>().ok());
@@ -312,7 +305,7 @@ async fn spawn(app: &AppHandle, state: &AppState, exe: &Path) -> Option<Arc<Help
         }
 
         alive.store(false, Ordering::SeqCst);
-        // Nothing will ever answer these now -- release every waiter instead
+        // Nothing will ever answer these now; release every waiter instead
         // of letting them sit until their individual timeouts.
         let drained: Vec<_> = pending.lock().unwrap().drain().map(|(_, tx)| tx).collect();
         for tx in drained {
@@ -328,7 +321,7 @@ async fn spawn(app: &AppHandle, state: &AppState, exe: &Path) -> Option<Arc<Help
             return; // we asked it to stop
         }
 
-        // It bowed out because another helper owns the singleton name -- most
+        // It bowed out because another helper owns the singleton name; most
         // likely a second copy of MultiRoblox is open and swept us. Respawning
         // would just lose the same race again, so stop and say so plainly.
         if duplicate_r.load(Ordering::SeqCst) {
@@ -423,6 +416,13 @@ async fn spawn(app: &AppHandle, state: &AppState, exe: &Path) -> Option<Arc<Help
 /// watcher live in its memory, so they have to be told again.
 async fn reapply_state(app: &AppHandle, state: &AppState, helper: &Arc<Helper>) {
     let settings = crate::settings::load_settings();
+    // The daemon holds the mutex from startup (multi-instance on by default).
+    // Only send mutex|off if the user explicitly turned multi-instance off;
+    // without this, a daemon crash would silently re-enable multi-instance.
+    let multi_instance = settings.get("multiInstance").and_then(|v| v.as_bool()).unwrap_or(true);
+    if !multi_instance {
+        let _ = helper.request("mutex|off", DEFAULT_TIMEOUT).await;
+    }
     if settings
         .get("antiAfk")
         .and_then(|v| v.as_bool())
@@ -481,7 +481,7 @@ pub async fn shutdown(state: &AppState) {
     }
     let child = state.helper_child.lock().unwrap().take();
     if let Some(mut child) = child {
-        // Then make sure, and actually wait for the exit -- a still-running
+        // Then make sure, and actually wait for the exit; a still-running
         // helper keeps a handle on its own exe and on the singleton mutex.
         if tokio::time::timeout(Duration::from_secs(2), child.wait())
             .await
@@ -505,10 +505,18 @@ pub async fn shutdown(state: &AppState) {
 pub fn shutdown_blocking(state: &AppState) {
     state.helper_shutdown.store(true, Ordering::SeqCst);
     // try_lock, not blocking_lock: this runs on the Tauri run-loop thread and
-    // blocking_lock panics inside a runtime context -- with panic=abort that
+    // blocking_lock panics inside a runtime context; with panic=abort that
     // would take the whole process down on the way out.
-    if let Ok(mut guard) = state.helper.try_lock() {
-        drop(guard.take());
+    //
+    // Retried rather than attempted once: a single contended try_lock left the
+    // Helper alive, so the daemon's stdin was never closed, it never saw EOF,
+    // and it stayed up holding Roblox's singleton mutex after the app was gone.
+    for _ in 0..20 {
+        if let Ok(mut guard) = state.helper.try_lock() {
+            drop(guard.take());
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
     if let Some(mut child) = state.helper_child.lock().unwrap().take() {
         for _ in 0..12 {
@@ -518,6 +526,26 @@ pub fn shutdown_blocking(state: &AppState) {
             std::thread::sleep(Duration::from_millis(50));
         }
         let _ = child.start_kill();
+        // start_kill only *signals*. Without waiting for the exit here the
+        // process outlives us often enough to keep the mutex held, which is
+        // exactly the state that blocks multi-instance on the next start.
+        for _ in 0..40 {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+    // Still up (or we never had a handle on it, e.g. a stray from a previous
+    // crash): nothing else will release the mutex once we exit.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "RobloxNative.exe", "/T"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
     }
 }
 

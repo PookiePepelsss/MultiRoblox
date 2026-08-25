@@ -1,5 +1,5 @@
 // Account instance screenshots, optionally cropped to a per-account outlined
-// region, delivered to a Discord webhook. No files touch disk -- the resident
+// region, delivered to a Discord webhook. No files touch disk; the resident
 // helper's "capture" request returns the PNG as base64 on the same pipe it
 // serves everything else (see RobloxNative.cs), so this module just
 // decodes/re-encodes bytes in memory.
@@ -37,8 +37,8 @@ pub async fn capture_preview_b64(app: &AppHandle, state: &AppState, account_id: 
 
 // Screenshots of a logged-in game session are about as sensitive as this app
 // gets, and the destination is free text in the UI. Restrict it to real
-// Discord webhook endpoints so a typo -- or a URL pasted from somewhere else
-// -- can't quietly ship captures to a third party.
+// Discord webhook endpoints so a typo (or a URL pasted from somewhere else)
+// can't quietly ship captures to a third party.
 const DISCORD_WEBHOOK_HOSTS: [&str; 6] = [
     "discord.com",
     "www.discord.com",
@@ -68,7 +68,7 @@ pub fn validate_webhook_url(url: &str) -> Result<(), String> {
 }
 
 // Discord's multi-attachment webhook format: each file gets its own part
-// named files[0], files[1], etc, all in one POST -- one message per capture
+// named files[0], files[1], etc, all in one POST; one message per capture
 // pass instead of spamming a separate message per outlined spot.
 pub async fn send_to_discord_webhook(state: &AppState, webhook_url: &str, images: Vec<Vec<u8>>, content: &str) -> Result<(), String> {
     let mut form = reqwest::multipart::Form::new().text("content", content.to_string());

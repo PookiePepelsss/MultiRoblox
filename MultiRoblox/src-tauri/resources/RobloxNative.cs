@@ -394,12 +394,20 @@ internal static class HandleCloser
     // Returns how many singleton-event handles were closed. Deliberately
     // writes nothing to stdout -- daemon mode multiplexes a line protocol
     // over that stream, and a stray "CLOSED:<pid>" would desync it.
-    public static int CloseRobloxSingletonHandles()
+    //
+    // exemptPids: PIDs of Roblox instances we launched and are actively
+    // tracking. Their singleton handles are left alone so closing handles
+    // before a new spawn can't crash an already-running instance.
+    // Passing null closes handles from every Roblox process (original behaviour).
+    public static int CloseRobloxSingletonHandles(System.Collections.Generic.HashSet<int> exemptPids = null)
     {
         int closed = 0;
         var robloxPids = new System.Collections.Generic.HashSet<int>();
         foreach (var p in Process.GetProcessesByName("RobloxPlayerBeta"))
+        {
+            if (exemptPids != null && exemptPids.Contains(p.Id)) continue;
             robloxPids.Add(p.Id);
+        }
         if (robloxPids.Count == 0) return 0;
 
         int size = 1 << 20;
@@ -1002,8 +1010,21 @@ internal static class Daemon
                     break;
 
                 case "closehandles":
-                    Reply(id, HandleCloser.CloseRobloxSingletonHandles().ToString());
+                {
+                    System.Collections.Generic.HashSet<int> exempt = null;
+                    if (p.Length > 2 && !string.IsNullOrWhiteSpace(p[2]))
+                    {
+                        exempt = new System.Collections.Generic.HashSet<int>();
+                        foreach (var tok in p[2].Split(','))
+                        {
+                            int pid;
+                            if (int.TryParse(tok.Trim(), out pid) && pid > 0)
+                                exempt.Add(pid);
+                        }
+                    }
+                    Reply(id, HandleCloser.CloseRobloxSingletonHandles(exempt).ToString());
                     break;
+                }
 
                 case "mutex":
                 {

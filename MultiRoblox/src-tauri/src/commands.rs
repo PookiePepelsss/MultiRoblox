@@ -41,7 +41,7 @@ pub fn settings_save(state: State<AppState>, data: Map<String, Value>) -> bool {
     }
     save_settings(&s);
     if let Some(Value::Bool(on)) = multi_instance {
-        // Releases/re-acquires the mutex inside the one helper process --
+        // Releases/re-acquires the mutex inside the one helper process;
         // toggling this no longer starts or kills anything.
         let app = state.app_handle.clone();
         tauri::async_runtime::spawn(async move {
@@ -148,7 +148,7 @@ pub fn enc_set_key(state: State<AppState>, pass: Option<String>) -> Value {
 
 #[tauri::command]
 pub async fn multiinstance_status(state: State<'_, AppState>) -> Result<Value, ()> {
-    // Defaults on, matching the startup path in lib.rs -- only an explicit
+    // Defaults on, matching the startup path in lib.rs; only an explicit
     // false counts as off. These two used to disagree (false here, true
     // there), so on a fresh install the toggle read "off" while the helper was
     // already holding the mutex.
@@ -307,7 +307,7 @@ pub fn fflag_write(flags: Value) -> bool {
 }
 
 // Compiled once instead of on every read/write. The patterns are constants,
-// so Regex::new can't fail on them -- doing it per call just re-paid the
+// so Regex::new can't fail on them; doing it per call just re-paid the
 // compile and kept an unwrap in the path for no reason.
 static FPS_CAP_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
     regex::Regex::new(r#"(?i)<int\s+name="FramerateCap"\s*>(\d+)</int>"#).unwrap()
@@ -359,7 +359,7 @@ pub fn fps_write(cap: f64) -> Value {
         .to_string()
     };
     // Some bootstrappers mark this file read-only for their own FPS
-    // unlocker -- clear it so our write isn't silently blocked.
+    // unlocker; clear it so our write isn't silently blocked.
     if let Ok(meta) = std::fs::metadata(&p) {
         let mut perms = meta.permissions();
         if perms.readonly() {
@@ -373,6 +373,26 @@ pub fn fps_write(cap: f64) -> Value {
     serde_json::json!({ "ok": true })
 }
 
+// ---- rdd (custom Roblox versions) ----
+#[tauri::command]
+pub async fn rdd_install(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    hash: String,
+) -> Result<Value, String> {
+    crate::rdd::install_version(&app, &state, &hash).await
+}
+
+#[tauri::command]
+pub fn rdd_list_versions() -> Vec<Value> {
+    crate::rdd::list_versions()
+}
+
+#[tauri::command]
+pub fn rdd_delete_version(hash: String) -> Result<bool, String> {
+    crate::rdd::delete_version(&hash).map(|_| true)
+}
+
 // ---- roblox process / launch ----
 #[tauri::command]
 pub async fn roblox_get_version(
@@ -380,7 +400,7 @@ pub async fn roblox_get_version(
     state: State<'_, AppState>,
     channel: Option<String>,
 ) -> Result<Option<String>, ()> {
-    // One retry -- covers a transient blip (CDN hiccup, brief DNS failure)
+    // One retry: covers a transient blip (CDN hiccup, brief DNS failure)
     // instead of leaving the badge stuck on "Not detected" until next launch.
     match crate::roblox_api::get_roblox_version(&state, channel.as_deref()).await {
         Ok(v) => Ok(Some(v)),
@@ -592,6 +612,17 @@ pub async fn roblox_open_login(app: AppHandle, state: State<'_, AppState>) -> Re
 }
 
 #[tauri::command]
+pub async fn roblox_login_with_credentials(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    username: String,
+    password: String,
+) -> Result<Value, ()> {
+    let r = crate::login::open_login_with_credentials(&app, &state, &username, &password).await;
+    Ok(serde_json::json!({ "success": r.success, "cookie": r.cookie, "username": r.username, "userId": r.user_id, "error": r.error }))
+}
+
+#[tauri::command]
 pub fn login_cancel(state: State<AppState>) {
     crate::login::cancel_login(&state);
 }
@@ -647,7 +678,7 @@ pub async fn tracking_capture_and_send(
     }
 }
 
-// Full reset from the lock screen -- stops the helper first and waits for it
+// Full reset from the lock screen; stops the helper first and waits for it
 // to actually exit (it holds its own exe file open, which would otherwise
 // make deleting the folder fail on Windows), wipes the entire app-data
 // folder, then clears the in-memory state that would otherwise still point

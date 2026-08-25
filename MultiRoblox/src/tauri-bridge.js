@@ -22,6 +22,7 @@
     savePackages: (packages) => invoke('packages_save', { packages }),
 
     openLogin: () => invoke('roblox_open_login'),
+    loginWithCredentials: (username, password) => invoke('roblox_login_with_credentials', { username, password }),
     openAccountInBrowser: (cookie) => invoke('roblox_open_account_browser', { cookie }),
     cancelLogin: () => invoke('login_cancel'),
     validateCookie: (cookie) => invoke('roblox_validate_cookie', { cookie }),
@@ -72,22 +73,26 @@
     onLogEntry: (cb) => listen('log:entry', (e) => cb(e.payload)),
 
     getRobloxVersion: (channel) => invoke('roblox_get_version', { channel: channel || null }),
+    rddInstall: (hash) => invoke('rdd_install', { hash }),
+    rddListVersions: () => invoke('rdd_list_versions'),
+    rddDeleteVersion: (hash) => invoke('rdd_delete_version', { hash }),
+    onRddProgress: (cb) => listen('rdd:progress', (e) => cb(e.payload)),
     getGameName: (placeId, cookie) => invoke('roblox_get_game_name', { placeIdOrTarget: placeId, cookie }),
-    // *.roblox.com sends no CORS headers -- fetch() from the webview's real
+    // *.roblox.com sends no CORS headers; fetch() from the webview's real
     // https://tauri.localhost origin gets blocked (Electron's file:// origin was
     // exempt from this, which is why this needs a Rust-side detour).
     // Returns { ok, status, data } to mirror the fetch()+r.json() shape callers used.
     robloxGet: (url) => invoke('roblox_get_json', { url }),
-    // api.altgen.me sends no Access-Control-Allow-Origin either -- same CORS
+    followUser: (cookie, username) => invoke('roblox_follow_user', { cookie, username }),
+    // api.altgen.me sends no Access-Control-Allow-Origin either; same CORS
     // gap as robloxGet above. Returns { status, data } (data is the API's own
     // { success, message/error, data } JSON body).
-    followUser: (cookie, username) => invoke('roblox_follow_user', { cookie, username }),
     altgenGenerate: (apiKey, quantity) => invoke('altgen_generate', { apiKey, quantity }),
   };
 
   // Electron version showed the BrowserWindow only once the page had painted
   // (win.once('ready-to-show', ...)). Tauri's window starts hidden the same
-  // way (see tauri.conf.json "visible": false) -- reveal it once the DOM is
+  // way (see tauri.conf.json "visible": false); reveal it once the DOM is
   // actually ready instead of on window creation, so there's no white flash.
   const reveal = () => invoke('show_main_window').catch(() => {});
   if (document.readyState === 'complete' || document.readyState === 'interactive') reveal();

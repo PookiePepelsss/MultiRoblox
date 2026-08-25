@@ -2,7 +2,7 @@
 // encryptField/decryptField/passphraseMode). Ciphertext tags (gs:/gcm:/cbc:/
 // safe:) are unchanged so records written by the Electron build keep
 // decrypting here. New writes use "safe2:" (plain DPAPI, no Local State
-// dependency) instead of Electron's Chromium-flavoured "safe:" -- see
+// dependency) instead of Electron's Chromium-flavoured "safe:"; see
 // crypto.rs for why.
 use crate::crypto;
 use crate::paths::local_state_path;
@@ -38,7 +38,7 @@ fn current_salt() -> String {
     get_str(&load_settings(), "kdfSalt").unwrap_or_else(|| crypto::LEGACY_SALT.to_string())
 }
 
-/// Fresh random salt for the scrypt key -- only called from enc_set_key,
+/// Fresh random salt for the scrypt key; only called from enc_set_key,
 /// which re-encrypts every account right after, so rotating here can never
 /// strand ciphertext under a salt nothing can derive anymore.
 pub fn rotate_salt() {
@@ -214,7 +214,7 @@ pub fn init_encryption(state: &AppState) {
             if !enc.is_empty() {
                 // customKeyEnc was written via Electron's safeStorage.encryptString directly
                 // (same Chromium os_crypt scheme as the account "safe:" cookies, just without
-                // the tag prefix) -- reuse the same Local-State-backed reader, not raw DPAPI.
+                // the tag prefix); reuse the same Local-State-backed reader, not raw DPAPI.
                 legacy = crypto::decrypt_electron_safe_storage(enc, &local_state_path());
             }
         }

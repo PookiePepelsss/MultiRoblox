@@ -9,7 +9,7 @@ fn now_ms() -> i64 {
 }
 
 // Roblox errors come back as {"errors":[{"code":N,"message":"..."}]} (or,
-// on some endpoints, a flat {"message":"..."}) -- pull just the human
+// on some endpoints, a flat {"message":"..."}); pull just the human
 // message out instead of showing the raw JSON in the UI.
 fn extract_roblox_error(body: &str) -> String {
     if let Ok(v) = serde_json::from_str::<Value>(body) {
@@ -79,46 +79,42 @@ pub async fn fetch_user_info(state: &AppState, cookie: &str) -> UserInfo {
     }
 }
 
-// Err carries the failure reason so the caller can log why, not just fail.
-// channel: None (or empty) checks the default production/LIVE channel via
-// clientsettingscdn's JSON API. Some("zcanary") etc. checks that specific
-// deployment channel instead -- clientsettingscdn's own `?channel=` query
-// param is silently ignored (confirmed live: passing zcanary, zintegration,
-// or a made-up channel name all return identical production data), so named
-// channels go through setup.rbxcdn.com/channel/<name>/version instead,
-// which returns the version hash as a plain-text body rather than JSON.
+// Fetches the Windows version hash from WEAO's tracker.
+// channel: "current" (default), "future", or "past".
 pub async fn get_roblox_version(state: &AppState, channel: Option<&str>) -> Result<String, String> {
-    let channel = channel.filter(|c| !c.is_empty());
-    let url = match channel {
-        Some(ch) => format!("https://setup.rbxcdn.com/channel/{}/version", urlencoding::encode(ch)),
-        None => "https://clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer".to_string(),
-    };
+    let sel = channel.filter(|c| !c.is_empty()).unwrap_or("current");
+    // "custom" isn't a WEAO endpoint: the hash comes straight from the
+    // customVersion setting the user pasted in, so there's nothing to fetch.
+    if sel == "custom" {
+        let h = crate::settings::load_settings()
+            .get("customVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if h.is_empty() {
+            return Err("no custom version hash set".into());
+        }
+        return Ok(h);
+    }
+    // Only the live build is tracked now; Custom is handled above.
+    let _ = sel;
+    let url = "https://weao.xyz/api/versions/current".to_string();
     let res = state
         .http
         .get(&url)
-        .header("User-Agent", UA)
+        .header("User-Agent", "WEAO-3PService")
         .timeout(Duration::from_secs(8))
         .send()
         .await
         .map_err(|e| format!("network error: {e}"))?;
-    let status = res.status();
-    if status != 200 {
-        return Err(format!("unexpected status {status} -- unknown or restricted channel"));
-    }
-    if channel.is_some() {
-        let text = res.text().await.map_err(|e| format!("bad response body: {e}"))?;
-        let text = text.trim();
-        if text.is_empty() || !text.starts_with("version-") {
-            return Err("response wasn't a version hash".to_string());
-        }
-        return Ok(text.to_string());
+    if res.status() != 200 {
+        return Err(format!("WEAO returned {}", res.status()));
     }
     let json: Value = res.json().await.map_err(|e| format!("bad response body: {e}"))?;
-    json.get("clientVersionUpload")
-        .or_else(|| json.get("version"))
+    json.get("Windows")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| "response missing version field".to_string())
+        .ok_or_else(|| "response missing Windows field".to_string())
 }
 
 async fn csrf_from_endpoint(state: &AppState, cookie: &str, endpoint: &str) -> Option<String> {
@@ -697,7 +693,7 @@ mod tests {
     }
 }
 
-// Same CORS gap as roblox.com above -- see altgen.me/docs/generate-accounts.
+// Same CORS gap as roblox.com above; see altgen.me/docs/generate-accounts.
 pub async fn altgen_generate(
     state: &AppState,
     api_key: &str,
@@ -727,7 +723,7 @@ pub async fn altgen_generate(
 // Roblox only reports placeId/gameId here when the target's "who can see me
 // online" privacy setting allows it AND they're in a joinable public server,
 // so a "not joinable" result is frequently the target's own privacy/server
-// state rather than a lookup failure -- the distinct messages below matter
+// state rather than a lookup failure; the distinct messages below matter
 // for the user being able to tell those apart.
 pub async fn follow_user_target(
     state: &AppState,
@@ -809,7 +805,7 @@ pub async fn follow_user_target(
             "username": real_name,
             "target": format!("{}:{}", pid, jid),
         })),
-        // In a game, but Roblox withheld the server details -- that's the
+        // In a game, but Roblox withheld the server details; that's the
         // target's join-privacy setting, not an error on our side.
         _ => Err(format!(
             "{} is in a game, but their server isn't joinable (their privacy settings may hide it)",

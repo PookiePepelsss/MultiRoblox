@@ -53,7 +53,7 @@ static EMBEDDED_NATIVE_SHA: once_cell::sync::Lazy<[u8; 32]> = once_cell::sync::L
 });
 
 // Content-hashed, not length-compared. The helper speaks a line protocol now,
-// so an older extracted copy isn't merely stale -- it doesn't understand
+// so an older extracted copy isn't merely stale; it doesn't understand
 // "daemon" at all, prints usage to stderr and exits immediately, which the
 // supervisor would then see as a crash and restart forever. A same-length
 // build is unlikely but entirely possible, and the failure mode is an endless
@@ -74,7 +74,7 @@ fn ensure_embedded_native_exe() -> Option<PathBuf> {
         // sweep strays before extracting, so that's already handled.
         if let Err(e) = std::fs::write(&out, EMBEDDED_NATIVE_EXE) {
             eprintln!("[helper] could not refresh RobloxNative.exe: {}", e);
-            // Only fall through to the existing copy if there is one -- better
+            // Only fall through to the existing copy if there is one; better
             // a stale helper than none, and the version check above will retry
             // on the next run.
             if !out.exists() {
@@ -125,7 +125,7 @@ pub async fn ensure_native_helper(app: &AppHandle, state: &AppState) -> Option<P
 
 async fn resolve_native_helper(app: &AppHandle) -> Option<PathBuf> {
     // Installed builds ship RobloxNative.exe as a normal loose resource next
-    // to MultiRoblox.exe (see tauri.conf.json's bundle.resources) -- prefer
+    // to MultiRoblox.exe (see tauri.conf.json's bundle.resources); prefer
     // that plain, installer-placed file over self-extracting the embedded
     // copy. A binary that writes another PE from its own resources to disk
     // at runtime and executes it is a classic dropper behavior pattern to
@@ -210,7 +210,7 @@ static PLACE_ID_ANY_RE: once_cell::sync::Lazy<regex::Regex> =
 // ---- singleton mutex ----
 // The one helper process owns ROBLOX_singletonMutex on a dedicated thread for
 // the whole session (see helper.rs / MutexHolder in RobloxNative.cs). Nothing
-// here spawns or kills a process any more -- these just tell the daemon which
+// here spawns or kills a process any more; these just tell the daemon which
 // state to be in, and block until it has actually applied it.
 pub async fn start_mutex_holder(app: &AppHandle, state: &AppState) {
     if crate::helper::ensure(app, state).await.is_none() {
@@ -236,7 +236,7 @@ pub async fn restart_mutex_holder(app: &AppHandle, state: &AppState) {
     }
 }
 
-// Stops the helper and waits for it to actually exit -- called right before
+// Stops the helper and waits for it to actually exit; called right before
 // wiping app data, since the running helper holds its own exe file (which
 // lives in that folder) open, and Windows won't delete a folder out from
 // under an open handle.
@@ -254,7 +254,7 @@ pub async fn stop_all_native_helpers(state: &AppState) {
 // longer exists after a full app-data wipe (a memoized helper-exe path, a
 // cached decryption key derived from a now-deleted salt, tracked PIDs for
 // accounts that no longer exist, etc). Deliberately leaves login_cancel
-// alone -- an in-progress login window closing on its own is harmless.
+// alone; an in-progress login window closing on its own is harmless.
 pub fn reset_state_for_wipe(state: &AppState) {
     *state.session_pass.lock().unwrap() = None;
     *state.cached_key.lock().unwrap() = None;
@@ -262,7 +262,7 @@ pub fn reset_state_for_wipe(state: &AppState) {
     *state.native_helper_path.lock().unwrap() = None;
     // Lift the shutdown latch stop_all_native_helpers set, so the helper is
     // allowed to start again once the folder has been re-created. The sweep
-    // flag stays set -- we just stopped the only helper there was, so there's
+    // flag stays set; we just stopped the only helper there was, so there's
     // nothing stray to clear.
     state
         .helper_shutdown
@@ -343,7 +343,7 @@ pub fn stop_antiafk(state: &AppState) {
     });
 }
 
-// `extra` must stay nested under "meta" -- renderer.js's log handler expects it there.
+// `extra` must stay nested under "meta"; renderer.js's log handler expects it there.
 pub fn emit_log(app: &AppHandle, level: &str, category: &str, message: &str, extra: Option<Value>) {
     let payload = serde_json::json!({
         "level": level,
@@ -355,7 +355,7 @@ pub fn emit_log(app: &AppHandle, level: &str, category: &str, message: &str, ext
 }
 
 // ---- Roblox process helpers ----
-// None means tasklist failed to run -- callers must not treat that as
+// None means tasklist failed to run; callers must not treat that as
 // "confirmed zero processes" or a transient spawn failure looks like a
 // closed account.
 async fn tasklist(filter_image: &str) -> Option<String> {
@@ -425,7 +425,7 @@ pub async fn set_roblox_volume(app: &AppHandle, state: &AppState, percent: f64) 
 
 // Instances this app launched and can still see, which is exactly the set
 // Kill acts on. Counting every RobloxPlayerBeta.exe on the machine would
-// report windows the user opened themselves -- and then Kill would leave them
+// report windows the user opened themselves; and then Kill would leave them
 // running, so the badge and the button would disagree.
 fn owned_running_count(state: &AppState, alive: &std::collections::HashSet<u32>) -> u32 {
     state
@@ -444,7 +444,7 @@ pub async fn count_roblox_processes(app: &AppHandle, state: &AppState) -> u32 {
     }
 }
 
-// Just hands idle physical pages back to the OS -- doesn't touch the
+// Just hands idle physical pages back to the OS; doesn't touch the
 // process itself, can't crash it.
 #[cfg(windows)]
 fn trim_process_memory(pid: u32) -> bool {
@@ -508,7 +508,7 @@ fn set_process_priority(_pid: u32, _class_name: &str) -> bool {
     false
 }
 
-// Manually set priorities stick -- recorded here so apply_priority_policy's
+// Manually set priorities stick; recorded here so apply_priority_policy's
 // automatic multi-instance rule leaves this account alone until it's
 // relaunched.
 pub fn set_account_priority(state: &AppState, account_id: &str, class_name: &str) -> Value {
@@ -533,7 +533,7 @@ pub fn clear_manual_priority(state: &AppState, account_id: &str) {
 
 // User opt-in (Settings -> Performance): once more than one account is
 // running, Windows splits CPU evenly across every instance even though only
-// one is actually being interacted with -- dropping the rest to Below
+// one is actually being interacted with; dropping the rest to Below
 // Normal lets the OS scheduler favor whichever isn't idle. Re-evaluated
 // after every launch/kill so it self-corrects back to Normal once only one
 // instance is left running. Accounts with a manual override (right-click ->
@@ -568,7 +568,7 @@ pub async fn trim_roblox_memory(app: &AppHandle, state: &AppState) -> Value {
         return serde_json::json!({ "ok": false, "trimmed": 0, "total": 0, "error": "could not enumerate Roblox processes" });
     };
 
-    // Skip PIDs still inside their launch grace window -- trimming while a
+    // Skip PIDs still inside their launch grace window; trimming while a
     // client is still loading assets can cause a stutter.
     let now = now_ms();
     let launching_pids: std::collections::HashSet<u32> = {
@@ -633,7 +633,7 @@ async fn wait_for_pids_closed(
     let started = std::time::Instant::now();
     loop {
         match native_pids(app, state).await {
-            // Couldn't enumerate -- no point spinning on an unanswerable question.
+            // Couldn't enumerate; no point spinning on an unanswerable question.
             None => return,
             Some(alive) if !pids.iter().any(|p| alive.contains(p)) => return,
             _ => {}
@@ -657,7 +657,7 @@ pub async fn kill_all_roblox(app: &AppHandle, state: &AppState) -> Value {
     // the only ones it has any business killing.
     let pids: Vec<u32> = state.account_pids.lock().unwrap().values().copied().collect();
     // Watched accounts with no attributed PID (URI-handler launches where the
-    // process was never identified) can't be targeted -- report them rather
+    // process was never identified) can't be targeted; report them rather
     // than quietly leaving them running.
     let untracked = watched_ids.len().saturating_sub(pids.len());
 
@@ -732,24 +732,26 @@ pub async fn kill_account_roblox(app: &AppHandle, state: &AppState, account_id: 
 }
 
 // Runs before every launch. Used to spawn (and then have to reap) a fresh
-// one-shot process each time -- the single biggest source of "a new
+// one-shot process each time; the single biggest source of "a new
 // RobloxNative process every time I launch an account". Now it's one request
 // on the pipe the helper is already holding open.
 async fn close_singleton_handles_only(app: &AppHandle, state: &AppState) {
-    if let Err(e) = crate::helper::call(app, state, "closehandles", crate::helper::SLOW_TIMEOUT).await
-    {
+    let stable_pids: String = state
+        .account_pids
+        .lock()
+        .unwrap()
+        .values()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let cmd = if stable_pids.is_empty() {
+        "closehandles".to_string()
+    } else {
+        format!("closehandles|{}", stable_pids)
+    };
+    if let Err(e) = crate::helper::call(app, state, &cmd, crate::helper::SLOW_TIMEOUT).await {
         eprintln!("[closehandles] {}", e);
     }
-}
-
-async fn close_singleton_and_hold_mutex(app: &AppHandle, state: &AppState) {
-    if !cfg!(windows) {
-        return;
-    }
-    // ensure() awaits the daemon's READY, which it only sends once it owns the
-    // mutex -- so this still guarantees the mutex is held before we launch.
-    start_mutex_holder(app, state).await;
-    close_singleton_handles_only(app, state).await;
 }
 
 // Third-party bootstrappers (Bloxstrap, Froststrap, Voidstrap, Fishstrap)
@@ -757,11 +759,25 @@ async fn close_singleton_and_hold_mutex(app: &AppHandle, state: &AppState) {
 // instead of the vanilla one. A hardcoded vanilla-first priority picked a
 // stale, long-unused vanilla install over the bootstrapper someone actually
 // plays through, so this instead compares RobloxPlayerBeta.exe's own
-// mtime across every root and picks whichever is genuinely newest -- a
+// mtime across every root and picks whichever is genuinely newest; a
 // bootstrapper's mod overlay only overwrites content/asset files on launch,
 // never the exe itself, so the exe's mtime reliably tracks the last real
 // Roblox self-update (and therefore actual use) for that install.
 const ROBLOX_INSTALL_ROOTS: [&str; 5] = ["Roblox", "Bloxstrap", "Froststrap", "Voidstrap", "Fishstrap"];
+
+// Exact-match lookup for a specific version folder across every install root.
+fn find_roblox_install_by_version(version: &str) -> Option<(&'static str, PathBuf, PathBuf)> {
+    let home = dirs_home()?;
+    let local_appdata = home.join("AppData").join("Local");
+    for root in ROBLOX_INSTALL_ROOTS {
+        let dir = local_appdata.join(root).join("Versions").join(version);
+        let exe = dir.join("RobloxPlayerBeta.exe");
+        if std::fs::metadata(&exe).is_ok() {
+            return Some((root, dir, exe));
+        }
+    }
+    None
+}
 
 fn get_latest_roblox_install() -> Option<(&'static str, PathBuf, PathBuf)> {
     let home = dirs_home()?;
@@ -819,17 +835,25 @@ const MIN_PLAUSIBLE_EXE_BYTES: u64 = 5_000_000;
 
 // live_version is the current LIVE-channel clientVersionUpload (e.g.
 // "version-0123456789abcdef"), which is exactly the install's own
-// version-folder name -- so this is a plain string compare, no parsing.
+// version-folder name; so this is a plain string compare, no parsing.
 // A locally installed copy that isn't LIVE (stale cache, beta/canary
 // channel someone's bootstrapper pulled, etc.) is refused here rather than
 // force-launched; returning None falls through to the existing
 // roblox-player: URI fallback, which hands off to Roblox's own updater to
 // fetch/launch the real LIVE client instead.
 async fn spawn_roblox_direct(roblox_uri: &str, live_version: Option<&str>) -> Option<u32> {
-    let (root, dir, exe) = get_latest_roblox_install()?;
+    // A pinned version selects that exact build when it's installed, rather
+    // than only being used to reject the newest one. That's what makes the
+    // version picker actually switch which client runs; without it the newest
+    // install always won and the pin could only ever refuse to launch.
+    let picked = live_version.and_then(find_roblox_install_by_version);
+    let (root, dir, exe) = match picked {
+        Some(found) => found,
+        None => get_latest_roblox_install()?,
+    };
     // Bootstrapper forks (Bloxstrap etc.) only touch their version folder's
     // mtime/name on their OWN update cadence, not on every Roblox content
-    // update -- so this folder-name compare can go permanently stale for
+    // update, so this folder-name compare can go permanently stale for
     // them even on a fully current install. That made lock-channel users on
     // a bootstrapper fail this check on every single launch, fall through to
     // the roblox-player: URI updater every time, and effectively "redownload"
@@ -864,11 +888,12 @@ async fn spawn_roblox_direct(roblox_uri: &str, live_version: Option<&str>) -> Op
 // close-detection latency while still tolerating a single transient miss.
 // The PID readings come from the resident RobloxNative "watch" helper doing
 // real process enumeration (not flaky tasklist parsing), so one miss of
-// tolerance is enough -- faster than the old 3x2s=6s, so the card updates
+// tolerance is enough; faster than the old 3x2s=6s, so the card updates
 // and the watcher shuts down within ~2s of Roblox actually closing.
-const MISS_THRESHOLD: u32 = 2;
-pub const POLL_INTERVAL: Duration = Duration::from_secs(1);
+const MISS_THRESHOLD: u32 = 3;
+pub const POLL_INTERVAL: Duration = Duration::from_millis(300);
 const LAUNCH_DELAY_MS: i64 = 15_000;
+const LAUNCH_STAGGER_MS: i64 = 800;
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -901,7 +926,7 @@ fn stop_watch_poll_if_idle(state: &AppState) {
 }
 
 // Turns on the helper's PID broadcast thread; it pushes "E|PIDS|..." events
-// which helper.rs drops straight into watch_pid_cache. Idempotent -- asking
+// which helper.rs drops straight into watch_pid_cache. Idempotent; asking
 // twice just re-arms the same thread inside the same process.
 async fn ensure_pid_watcher(app: &AppHandle, state: &AppState) {
     let _ = crate::helper::call(
@@ -930,38 +955,6 @@ async fn cached_or_spawn_pids(app: &AppHandle, state: &AppState) -> Option<std::
     native_pids(app, state).await
 }
 
-// Polls for whichever new RobloxPlayerBeta.exe PID appears after the
-// URI-handler fallback (do_launch has no PID back from that path the way
-// spawn_roblox_direct gives one). Scoped to a fresh `pids_before` snapshot
-// taken right before the fallback fires and to PIDs no other account already
-// claims, so it can't steal an unrelated, already-running Roblox window --
-// unlike a blind "first available orphan" grab, which would happily adopt
-// any pre-existing untracked window (one the user opened outside
-// MultiRoblox entirely) the moment this account's watch tick came up empty.
-async fn wait_for_new_roblox_pid(
-    app: &AppHandle,
-    state: &AppState,
-    pids_before: &std::collections::HashSet<u32>,
-    timeout: Duration,
-) -> Option<u32> {
-    let started = std::time::Instant::now();
-    loop {
-        if let Some(alive) = native_pids(app, state).await {
-            let claimed: std::collections::HashSet<u32> =
-                state.account_pids.lock().unwrap().values().copied().collect();
-            if let Some(new_pid) = alive
-                .iter()
-                .find(|p| !pids_before.contains(p) && !claimed.contains(p))
-            {
-                return Some(*new_pid);
-            }
-        }
-        if started.elapsed() >= timeout {
-            return None;
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-}
 
 fn start_watch_poll(app: &AppHandle, state_handle: tauri::AppHandle) {
     let already = app
@@ -1013,7 +1006,7 @@ async fn watch_tick(app: &AppHandle) {
     let pids = cached_or_spawn_pids(app, &state).await;
     WATCH_TICK_IN_FLIGHT.store(false, Ordering::SeqCst);
     // Couldn't get a reading this tick (helper unavailable, spawn/timeout
-    // failure) -- can't tell who's alive. Bail without touching miss counts
+    // failure), so we can't tell who's alive. Bail without touching miss counts
     // so a still-running account never gets penalized for it.
     let Some(alive_pids) = pids else {
         return;
@@ -1021,14 +1014,13 @@ async fn watch_tick(app: &AppHandle) {
 
     let now = now_ms();
     let mut closed: Vec<String> = Vec::new();
-    let claimed: std::collections::HashSet<u32> = {
-        let watched = state.watched_accounts.lock().unwrap();
-        let pids = state.account_pids.lock().unwrap();
-        watched
-            .keys()
-            .filter_map(|id| pids.get(id).copied())
-            .collect()
-    };
+    // All PIDs we've attributed to any account, watched or not. A newly
+    // launched account has its PID inserted into account_pids before
+    // watch_roblox() is called; excluding not-yet-watched accounts from
+    // this set would let a tick racing that window steal the fresh PID and
+    // assign it to a different account that happens to need one.
+    let claimed: std::collections::HashSet<u32> =
+        state.account_pids.lock().unwrap().values().copied().collect();
     let mut orphans: Vec<u32> = alive_pids
         .iter()
         .filter(|p| !claimed.contains(p))
@@ -1050,7 +1042,7 @@ async fn watch_tick(app: &AppHandle) {
         let pid = state.account_pids.lock().unwrap().get(&account_id).copied();
         // No tracked PID means this account launched via the URI-handler
         // fallback (direct spawn failed or Roblox wasn't found at the
-        // expected install path) -- we can't identify which specific process
+        // expected install path); we can't identify which specific process
         // is "ours", so fall back to the coarse "is anything running at all"
         // signal instead of declaring it closed outright.
         let mut running = match pid {
@@ -1064,7 +1056,7 @@ async fn watch_tick(app: &AppHandle) {
         // away; this is just the secondary net for the rare case where
         // Roblox took longer than that poll's window to actually start.
         // Same "adopt any unclaimed orphan" ambiguity the original
-        // died-PID reassignment already accepted -- rare and last-resort
+        // died-PID reassignment already accepted; rare and last-resort
         // now, not the primary mechanism.
         if !orphans.is_empty() && (pid.is_none() || !running) {
             let adopted = orphans.remove(0);
@@ -1132,7 +1124,7 @@ async fn watch_tick(app: &AppHandle) {
                     let account_id2 = account_id.clone();
                     tauri::async_runtime::spawn(async move {
                         let st = app2.state::<AppState>();
-                        // Same lock manual launches use -- without it a
+                        // Same lock manual launches use; without it a
                         // mass-crash could fire several concurrent launches
                         // with no stagger between them.
                         let _guard = st.launch_lock.lock().await;
@@ -1143,7 +1135,7 @@ async fn watch_tick(app: &AppHandle) {
                         app,
                         "warn",
                         "crash",
-                        &format!("Auto-relaunch skipped for {} -- too many recent crashes", username.unwrap_or(account_id)),
+                        &format!("Auto-relaunch skipped for {}: too many recent crashes", username.unwrap_or(account_id)),
                         None,
                     );
                 }
@@ -1159,16 +1151,8 @@ async fn watch_tick(app: &AppHandle) {
 }
 
 // ---- launch ----
-// Minimum gap between one launch finishing and the next one spawning. Launches
-// are already serialized by launch_lock, so this is extra spacing on top of
-// that -- it keeps clients from starting close enough together to contend for
-// CPU/disk or to hammer the auth-ticket endpoint. Because the lock means the
-// next launch reaches the check almost immediately, in practice this sleeps
-// very nearly its full value on every launch after the first.
-const LAUNCH_STAGGER_MS: i64 = 2_000;
-
-// A launch can legitimately take ~30s -- staggering, CSRF, ticket retries with
-// backoff, then up to three spawn attempts -- so it needs a way out. The flag
+// A launch can legitimately take ~30s: staggering, CSRF, ticket retries with
+// backoff, then up to three spawn attempts; so it needs a way out. The flag
 // is registered before the launch queues on launch_lock, so a launch that
 // hasn't started yet can be abandoned too.
 pub fn register_launch(state: &AppState, account_id: &str) -> std::sync::Arc<AtomicBool> {
@@ -1216,7 +1200,9 @@ pub async fn do_launch(
     cookie: &str,
     target: &str,
 ) -> Value {
-    close_singleton_and_hold_mutex(app, state).await;
+    // Mutex only here. The singleton-handle scan is deliberately NOT done
+    // yet; see the call just before the spawn loop below.
+    start_mutex_holder(app, state).await;
     if launch_cancelled(state, account_id) {
         return cancelled_result();
     }
@@ -1232,8 +1218,43 @@ pub async fn do_launch(
         return cancelled_result();
     }
 
-    let csrf_token = crate::roblox_api::get_csrf_token(state, cookie).await;
-    let Some(csrf_token) = csrf_token else {
+    // Settings loaded here so version_pin is available for the parallel fetch.
+    let launch_settings = crate::settings::load_settings();
+    let lock_channel = launch_settings
+        .get("lockChannel")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let version_pin = if lock_channel {
+        launch_settings
+            .get("robloxChannel")
+            .and_then(|v| v.as_str())
+            .unwrap_or("current")
+            .to_string()
+    } else {
+        String::new()
+    };
+
+    // Run CSRF fetch and version check concurrently — both need network,
+    // neither depends on the other. On the common path (CSRF cached, no
+    // lockChannel) both return instantly and the join costs nothing.
+    let (csrf_result, live_version) = tokio::join!(
+        crate::roblox_api::get_csrf_token(state, cookie),
+        async {
+            if lock_channel {
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    crate::roblox_api::get_roblox_version(state, Some(version_pin.as_str())),
+                )
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+            } else {
+                None
+            }
+        }
+    );
+
+    let Some(csrf_token) = csrf_result else {
         let accounts = crate::storage::load_accounts(state);
         let username = find_username(&accounts, account_id);
         emit_log(
@@ -1268,7 +1289,7 @@ pub async fn do_launch(
         return serde_json::json!({ "success": false, "error": format!("Failed to get auth ticket: {}", ticket_result.error.unwrap_or_default()) });
     }
     let ticket = ticket_result.ticket.unwrap_or_default();
-    // Last point before we start spawning processes -- after this the client
+    // Last point before we start spawning processes; after this the client
     // is Roblox's to manage, and cancelling would mean killing it instead.
     if launch_cancelled(state, account_id) {
         return cancelled_result();
@@ -1350,7 +1371,7 @@ pub async fn do_launch(
                         }
                     } else if path == "/share" || (share_code.is_some() && share_type.is_some()) {
                         let Some(code) = share_code else {
-                            return serde_json::json!({ "success": false, "error": "Invalid share link -- no code found." });
+                            return serde_json::json!({ "success": false, "error": "Invalid share link: no code found." });
                         };
                         let resolved = crate::roblox_api::resolve_share_link(
                             state,
@@ -1380,23 +1401,7 @@ pub async fn do_launch(
     let launch_time = now_ms();
     let browser_id: u64 = rand::random::<u64>() % 9_000_000_000_000 + 1_000_000_000_000;
 
-    // Settings > Roblox: which deployment channel to run, and whether that
-    // choice is pinned. Unlocked always means production/LIVE (empty
-    // channel), matching the previous hardcoded behavior.
-    let launch_settings = crate::settings::load_settings();
-    let lock_channel = launch_settings
-        .get("lockChannel")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let channel = if lock_channel {
-        launch_settings
-            .get("robloxChannel")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    } else {
-        String::new()
-    };
+    let channel = String::new();
 
     let roblox_uri = if !launcher_url.is_empty() {
         format!(
@@ -1410,33 +1415,23 @@ pub async fn do_launch(
         )
     };
 
-    // Only ever launch the current build for the target channel (LIVE by
-    // default, or the locked channel above) -- a stale cached version-folder
-    // or a different channel a bootstrapper pulled down shouldn't get
-    // force-launched just because it's the newest thing physically on disk.
-    // Unknown (network failure or timeout) doesn't block launch, since
-    // that's Roblox's API being unreachable, not a real mismatch. Every
-    // other network call in this file is timeout-wrapped except this one
-    // was -- an unresponsive (not just erroring) clientsettingscdn/
-    // setup.rbxcdn.com would otherwise hang the Launch button forever with
-    // no recovery, since this runs on every single launch.
-    let live_version = if lock_channel {
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            crate::roblox_api::get_roblox_version(state, Some(channel.as_str())),
-        )
-        .await
-        .ok()
-        .and_then(|r| r.ok())
-    } else {
-        None
-    };
+    // closehandles (called on every spawn attempt below) closes singleton
+    // handles from ALL running Roblox instances so the new one can start
+    // with a clean singleton state. The brief moment while handles are
+    // closed can confuse a running instance into crashing if the watch loop
+    // happens to tick right then and counts the PID miss. Extend the grace
+    // window for every already-running account so those misses are ignored
+    // for the duration of this launch sequence.
+    {
+        let grace_until = now_ms() + 8_000;
+        let mut watched = state.watched_accounts.lock().unwrap();
+        for (id, ready_at) in watched.iter_mut() {
+            if id != account_id {
+                *ready_at = (*ready_at).max(grace_until);
+            }
+        }
+    }
 
-    // Falling through to the OS URI handler on spawn failure is what
-    // triggers Roblox's own "reinstall?" prompt -- usually just a launch
-    // catching Roblox mid self-update with a truncated exe (or, now, a
-    // non-LIVE install), so retry a few times before giving up to that
-    // fallback, which hands off to Roblox's own updater.
     let mut spawned_pid: Option<u32> = None;
     for attempt in 0..3 {
         if attempt > 0 {
@@ -1447,11 +1442,29 @@ pub async fn do_launch(
                 return cancelled_result();
             }
         }
+        // Immediately before the spawn, on every attempt. A client launched
+        // moments ago creates its own ROBLOX_singletonEvent a second or two
+        // after it starts, so scanning any earlier (before the launch
+        // stagger, the CSRF fetch and the auth-ticket retries) leaves a wide
+        // window for a fresh handle to appear. Roblox then sees it on
+        // startup and quits on its own, which surfaces here as an
+        // unexplained "closed unexpectedly" for the second account.
+        close_singleton_handles_only(app, state).await;
         spawned_pid = spawn_roblox_direct(&roblox_uri, live_version.as_deref()).await;
         if spawned_pid.is_some() {
             break;
         }
     }
+    // A version-pin mismatch on its own must never reach the URI fallback
+    // below: that hands off to roblox-player:, which starts Roblox's own
+    // bootstrapper and is what surfaces as "Installer encountered a critical
+    // error". A pinned version that doesn't match the local build is a
+    // reason to launch the build that IS installed, not to reinstall.
+    if spawned_pid.is_none() && live_version.is_some() {
+        close_singleton_handles_only(app, state).await;
+        spawned_pid = spawn_roblox_direct(&roblox_uri, None).await;
+    }
+
     match spawned_pid {
         Some(pid) => {
             state
@@ -1461,39 +1474,34 @@ pub async fn do_launch(
                 .insert(account_id.to_string(), pid);
             // Fired the instant the process exists, not after the trailing
             // priority/bookkeeping work below or the JSON round-trip back to
-            // the caller -- that gap (small on its own, but stacked behind
+            // the caller; that gap (small on its own, but stacked behind
             // CSRF/ticket fetches and the inter-launch stagger for every
             // account after the first) is what made the UI's "launched"
             // color feel like it lagged the real state of the world.
             let _ = app.emit("roblox:started", account_id);
+            // Stagger countdown starts from actual spawn time so trailing
+            // bookkeeping (priority policy, storage write) counts toward it.
+            *state.last_launch_ts.lock().unwrap() = now_ms();
         }
         None => {
-            // Snapshot alive PIDs before handing off to the OS URI handler,
-            // then poll for whichever new one shows up -- gives this
-            // fallback-launched account a real, precisely-attributed PID
-            // immediately, instead of leaving it untracked for the shared
-            // watch loop's much coarser adoption to (maybe, eventually)
-            // pick up.
-            let pids_before = cached_or_spawn_pids(app, state)
-                .await
-                .unwrap_or_default();
-            let _ = tauri_plugin_opener::open_url(&roblox_uri, None::<&str>);
-            if let Some(pid) =
-                wait_for_new_roblox_pid(app, state, &pids_before, Duration::from_secs(10)).await
-            {
-                state
-                    .account_pids
-                    .lock()
-                    .unwrap()
-                    .insert(account_id.to_string(), pid);
-                let _ = app.emit("roblox:started", account_id);
-            }
+            let accounts = crate::storage::load_accounts(state);
+            let username = find_username(&accounts, account_id);
+            emit_log(
+                app,
+                "err",
+                "launch",
+                &format!(
+                    "Launch failed for {}: no usable Roblox installation found",
+                    username.clone().unwrap_or_else(|| account_id.to_string())
+                ),
+                Some(serde_json::json!({ "accountId": account_id, "username": username })),
+            );
+            return serde_json::json!({ "success": false, "error": "No usable Roblox installation found. Install Roblox or use the Version Manager to install a build." });
         }
     }
 
     apply_priority_policy(state, &launch_settings).await;
 
-    *state.last_launch_ts.lock().unwrap() = now_ms();
     crate::roblox_api::invalidate_ticket(state, &cookie);
 
     let mut accounts = crate::storage::load_accounts(state);
@@ -1502,6 +1510,9 @@ pub async fn do_launch(
         .position(|a| a.get("id").and_then(|v| v.as_str()) == Some(account_id))
     {
         accounts[idx]["lastUsed"] = Value::String(chrono::Utc::now().to_rfc3339());
+        if !t.is_empty() {
+            accounts[idx]["gameTarget"] = Value::String(t.to_string());
+        }
         let username = accounts[idx]
             .get("username")
             .and_then(|v| v.as_str())

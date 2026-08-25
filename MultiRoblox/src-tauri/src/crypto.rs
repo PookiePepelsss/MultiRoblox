@@ -1,7 +1,7 @@
 // Port of the Electron app's field-level encryption (see the old main.js
 // SALT/encryptGCM/decryptField block). Ciphertext format tags are unchanged
 // so every account/genhistory record written by the Electron build keeps
-// decrypting correctly after migrating to this app -- nothing gets re-keyed
+// decrypting correctly after migrating to this app; nothing gets re-keyed
 // except through the same explicit passphrase-change path as before.
 use aes::Aes256;
 use aes_gcm::aead::{Aead, KeyInit};
@@ -15,7 +15,7 @@ use sha2::Sha512;
 pub const LEGACY_SALT: &str = "multiroblox-v1-salt-2025";
 const ITERATIONS: u32 = 210_000;
 const KEY_LEN: usize = 32;
-// N=2^16, r=8, p=1 -- mirrors SCRYPT_PARAMS in the old main.js.
+// N=2^16, r=8, p=1: mirrors SCRYPT_PARAMS in the old main.js.
 const SCRYPT_LOG_N: u8 = 16;
 const SCRYPT_R: u32 = 8;
 const SCRYPT_P: u32 = 1;
@@ -39,7 +39,7 @@ pub fn derive_legacy_key(pass: &str) -> [u8; KEY_LEN] {
     out
 }
 
-/// `tag:iv_b64:authtag_b64:data_b64` -- matches encryptGCM in the old main.js
+/// `tag:iv_b64:authtag_b64:data_b64`; matches encryptGCM in the old main.js
 /// (Node's cipher.getAuthTag() is appended separately from the ciphertext;
 /// the `aes-gcm` crate instead appends the 16-byte tag to the ciphertext, so
 /// we split/rejoin to keep the on-disk format identical).
@@ -82,7 +82,7 @@ pub fn decrypt_gcm(ct: &str, key: &[u8; KEY_LEN], tag: &str) -> Option<String> {
     String::from_utf8(pt).ok()
 }
 
-/// Legacy unauthenticated CBC reader -- read-only, ported from decryptCBC.
+/// Legacy unauthenticated CBC reader: read-only, ported from decryptCBC.
 /// Never produced by new writes; kept so cbc: records from very old builds
 /// still decrypt and migrate forward on next save.
 pub fn decrypt_cbc(ct: &str, key: &[u8; KEY_LEN]) -> Option<String> {
@@ -101,7 +101,7 @@ pub fn decrypt_cbc(ct: &str, key: &[u8; KEY_LEN]) -> Option<String> {
 
 // ---- DPAPI (Windows) --------------------------------------------------
 // Direct CryptProtectData/CryptUnprotectData passthrough, used for this
-// app's OWN "safe2:" ciphertext (new writes, no separate key file needed --
+// app's OWN "safe2:" ciphertext (new writes, no separate key file needed;
 // DPAPI ties the blob to the logged-in Windows user by itself).
 #[cfg(windows)]
 pub mod dpapi {
@@ -235,7 +235,7 @@ mod tests {
         }
     }
 
-    // tag:iv_b64:authtag_b64:data_b64 -- the shape the Electron build wrote and
+    // tag:iv_b64:authtag_b64:data_b64, the shape the Electron build wrote and
     // still reads. Changing it silently orphans every stored cookie.
     #[test]
     fn gcm_keeps_the_on_disk_layout() {

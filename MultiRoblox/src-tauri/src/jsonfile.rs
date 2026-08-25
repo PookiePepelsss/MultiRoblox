@@ -6,7 +6,7 @@
 //   * Writes were std::fs::write, which truncates the target and then writes.
 //     A crash, a power cut or a full disk mid-write leaves a truncated file.
 //   * Reads did serde_json::from_str(..).unwrap_or_default(), so that
-//     truncated file parsed as "no accounts" -- and the very next save wrote
+//     truncated file parsed as "no accounts"; and the very next save wrote
 //     that empty list back over the only copy.
 //
 // Now writes land via a temp file + rename (atomic on the same volume), and a
@@ -24,7 +24,7 @@ static UNREADABLE: Lazy<Mutex<HashSet<PathBuf>>> = Lazy::new(|| Mutex::new(HashS
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// File contents minus a leading UTF-8 BOM. serde rejects the BOM outright,
-/// which would make a perfectly good file look corrupt -- and plenty of
+/// which would make a perfectly good file look corrupt; and plenty of
 /// Windows editors write one by default.
 fn read_text(path: &Path) -> Option<String> {
     let s = std::fs::read_to_string(path).ok()?;
@@ -33,7 +33,7 @@ fn read_text(path: &Path) -> Option<String> {
 
 /// Keeps the unparseable bytes around under a sibling name so nothing the
 /// user cares about is lost, and records the path so writes can be refused.
-/// Only backs up once -- a second pass must not overwrite the first (good)
+/// Only backs up once; a second pass must not overwrite the first (good)
 /// copy with a later, emptier one.
 fn note_corrupt(path: &Path) {
     UNREADABLE.lock().unwrap().insert(path.to_path_buf());
@@ -91,7 +91,7 @@ pub fn read_object(path: &Path) -> Map<String, Value> {
 
 /// Writes to a unique temp file, flushes it to disk, then renames over the
 /// target. The reader therefore only ever sees a complete file: the old one
-/// or the new one. sync_all before the rename matters -- without it the
+/// or the new one. sync_all before the rename matters; without it the
 /// rename can land while the contents are still only in the page cache.
 ///
 /// The temp name carries a counter because two concurrent saves sharing one

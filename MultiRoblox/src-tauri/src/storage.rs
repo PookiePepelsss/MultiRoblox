@@ -15,7 +15,7 @@ pub fn load_accounts_raw() -> Vec<Value> {
     read_json_array(&accounts_path())
 }
 
-// Decrypt failure means the cookie is unusable -- flag it immediately
+// Decrypt failure means the cookie is unusable; flag it immediately
 // instead of waiting on the renderer's async validation to find out.
 pub fn decrypt_account(state: &AppState, mut a: Value) -> Value {
     if let Some(cookie) = a.get("cookie").and_then(|v| v.as_str()) {
@@ -50,7 +50,7 @@ pub fn load_accounts(state: &AppState) -> Vec<Value> {
 pub fn save_accounts(state: &AppState, accounts: Vec<Value>) -> Result<(), String> {
     // The file is there but didn't parse, so what we just loaded is an empty
     // list rather than the real accounts. Writing that back would destroy the
-    // only copy -- refuse, and point at the backup instead.
+    // only copy; refuse, and point at the backup instead.
     let path = accounts_path();
     if crate::jsonfile::is_unreadable(&path) {
         return Err(

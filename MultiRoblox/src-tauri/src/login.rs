@@ -177,7 +177,7 @@ pub struct LoginResult {
     pub error: Option<String>,
 }
 
-// Native Tauri window instead of driving a downloaded Chrome over CDP --
+// Native Tauri window instead of driving a downloaded Chrome over CDP;
 // Chrome 136+ forces the "controlled by automated test software" banner and
 // full tabbed UI whenever CDP is attached (--app=<url> gets ignored), so a
 // clean chromeless login window isn't possible that way anymore. A
@@ -231,7 +231,7 @@ pub async fn open_login(app: &AppHandle, state: &AppState) -> LoginResult {
         });
     }
 
-    // Cancel any still-running previous attempt first -- state.login_cancel
+    // Cancel any still-running previous attempt first; state.login_cancel
     // is a single slot, so a stray "Use browser" -> Back -> "Use browser"
     // sequence could otherwise clobber a still-live sender.
     if let Some(stale) = state.login_cancel.lock().unwrap().take() {
@@ -278,8 +278,120 @@ pub async fn open_login(app: &AppHandle, state: &AppState) -> LoginResult {
     }
     .await;
 
-    // Not clearing state.login_cancel here -- if a newer open_login call
+    // Not clearing state.login_cancel here; if a newer open_login call
     // already cancelled and replaced it, doing so would rip out its sender.
+    let _ = window.close();
+    result
+}
+
+pub async fn open_login_with_credentials(
+    app: &AppHandle,
+    state: &AppState,
+    username: &str,
+    password: &str,
+) -> LoginResult {
+    let label = format!("login-{}", uuid::Uuid::new_v4().simple());
+    let login_url = match Url::parse("https://www.roblox.com/login") {
+        Ok(u) => u,
+        Err(e) => return LoginResult { success: false, cookie: None, username: None, user_id: None, error: Some(e.to_string()) },
+    };
+
+    let window = match tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::External(login_url))
+        .title("Logging in...")
+        .inner_size(900.0, 720.0)
+        .resizable(true)
+        .center()
+        .incognito(true)
+        .build()
+    {
+        Ok(w) => w,
+        Err(e) => return LoginResult { success: false, cookie: None, username: None, user_id: None, error: Some(format!("Failed to open login window: {}", e)) },
+    };
+
+    let closed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let closed2 = closed.clone();
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                closed2.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+    }
+
+    if let Some(stale) = state.login_cancel.lock().unwrap().take() {
+        let _ = stale.send(());
+    }
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    *state.login_cancel.lock().unwrap() = Some(cancel_tx);
+
+    // Escape the credentials for safe JS string embedding.
+    let js_username = username.replace('\\', "\\\\").replace('"', "\\\"");
+    let js_password = password.replace('\\', "\\\\").replace('"', "\\\"");
+
+    // Wait for the login form to appear then fill and submit it.
+    // Roblox's login page is a React SPA; the inputs need React's own
+    // synthetic event system to register the value, not just a direct .value=
+    // assignment. The nativeInputValueSetter trick below fires the correct
+    // React onChange so the submit button becomes enabled.
+    let inject_js = format!(r#"
+        (function tryFill() {{
+            var u = document.getElementById('login-username');
+            var p = document.getElementById('login-password');
+            if (!u || !p) {{ setTimeout(tryFill, 300); return; }}
+            var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            setter.call(u, "{username}");
+            u.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            setter.call(p, "{password}");
+            p.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            setTimeout(function() {{
+                var btn = document.getElementById('login-button');
+                if (btn) btn.click();
+            }}, 300);
+        }})();
+    "#, username = js_username, password = js_password);
+
+    // Give WebView2 time to paint before injecting.
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    let _ = window.eval(&inject_js);
+
+    let cookie_url = Url::parse("https://www.roblox.com").unwrap();
+    let result = async {
+        let started = std::time::Instant::now();
+        let timeout = Duration::from_secs(5 * 60);
+        loop {
+            if started.elapsed() >= timeout {
+                return LoginResult { success: false, cookie: None, username: None, user_id: None, error: Some("Timed out waiting for login.".into()) };
+            }
+            if closed.load(std::sync::atomic::Ordering::SeqCst) {
+                return LoginResult { success: false, cookie: None, username: None, user_id: None, error: Some("Login window closed".into()) };
+            }
+            tokio::select! {
+                _ = &mut cancel_rx => {
+                    return LoginResult { success: false, cookie: None, username: None, user_id: None, error: Some("Login window closed".into()) };
+                }
+                _ = tokio::time::sleep(Duration::from_millis(1200)) => {
+                    let found = window
+                        .cookies_for_url(cookie_url.clone())
+                        .ok()
+                        .and_then(|cookies| {
+                            cookies.into_iter().find(|c| {
+                                c.name() == ".ROBLOSECURITY" && c.value().len() > 100
+                            })
+                        })
+                        .map(|c| c.value().to_string());
+                    if let Some(cookie_val) = found {
+                        let info = crate::roblox_api::fetch_user_info(state, &cookie_val).await;
+                        if !info.ok {
+                            return LoginResult { success: false, cookie: None, username: None, user_id: None, error: Some(info.reason.unwrap_or_else(|| "Could not verify account.".into())) };
+                        }
+                        return LoginResult { success: true, cookie: Some(cookie_val), username: info.username, user_id: info.user_id, error: None };
+                    }
+                }
+            }
+        }
+    }
+    .await;
+
     let _ = window.close();
     result
 }

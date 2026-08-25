@@ -37,7 +37,7 @@ body{
 
 
 /* Mouse clicks never show a ring (:focus-visible only fires for keyboard/AT),
-   but keyboard focus MUST stay visible -- a bare outline:none with no
+   but keyboard focus MUST stay visible; a bare outline:none with no
    replacement here would leave keyboard users with no way to see where they
    are. */
 button:focus,.nav-item:focus,.tab-btn:focus{outline:none;}
@@ -65,23 +65,23 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 
 /* sidebar */
 #sidebar{position:relative;width:var(--sb);flex-shrink:0;background:var(--s1);border-right:1px solid var(--bd);display:flex;flex-direction:column;padding:10px 8px}
-/* Positioned in px by JS (positionNavSlider), same approach as .tab-slider --
+/* Positioned in px by JS (positionNavSlider), same approach as .tab-slider;
    items are flex-laid-out with gaps, not a fixed row height, so the pill's
    top/height come from the active item's own measured rect. */
 .nav-slider{position:absolute;left:8px;right:8px;border-radius:var(--r2);background-color:var(--ac);box-shadow:0 4px 12px -4px var(--ac3),0 1px 2px rgba(0,0,0,.3),inset 0 1px 0 rgba(255,255,255,.2);transition:top 220ms var(--smooth),height 220ms var(--smooth),opacity 150ms var(--smooth);pointer-events:none;z-index:0;opacity:0}
-/* Flat sidebar nav -- active state reads as a left accent bar (IDE-style),
+/* Flat sidebar nav; active state reads as a left accent bar (IDE-style),
    not a glossy floating pill. border-left is reserved at 2px on every item
    (transparent) so the active bar never shifts layout. */
 .nav-item{position:relative;z-index:1;width:100%;display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:var(--r2);border:1px solid transparent;background:transparent;color:var(--t2);cursor:pointer;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;text-align:left;transition:background var(--dur) var(--smooth),color var(--dur) var(--smooth),transform var(--dur) var(--smooth),box-shadow var(--dur) var(--smooth)}
 .nav-item:hover{color:var(--t1);background:var(--s2);transform:translateY(-1px)}
-/* .active no longer paints its own background/shadow -- .nav-slider (an
+/* .active no longer paints its own background/shadow; .nav-slider (an
    absolutely-positioned pill behind the row) supplies that now, and slides
    between items instead of one background cutting out and the next in. */
 /* Explicit transparent background here, not just an absence of one: without
    it, .nav-item:hover's background:var(--s2) still wins that property for
    the active item too (nothing more specific overrides it), and since
    .nav-item sits above .nav-slider in z-order, that dark fill painted right
-   over the purple pill -- the "turns black on hover" bug. */
+   over the purple pill; the "turns black on hover" bug. */
 .nav-item.active,.nav-item.active:hover,.nav-item.active:active{color:#fff;background:transparent}
 .nav-item.active:hover{transform:none}
 .nav-item .material-icons-round{font-size:17px;flex-shrink:0}
@@ -137,7 +137,7 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .vt.active{background-color:var(--ac);color:#fff;box-shadow:0 3px 8px -2px var(--ac3)}
 .vt .material-icons-round{font-size:18px}
 .grid.list-view{grid-template-columns:1fr;gap:8px}
-/* List view: compact horizontal rows -- avatar to the left of a name/id stack */
+/* List view: compact horizontal rows; avatar to the left of a name/id stack */
 .grid.list-view .card{flex-direction:row;align-items:center;min-height:0;height:auto;padding:9px 14px 9px 32px;gap:13px}
 .grid.list-view .drag-handle{left:10px;right:auto;top:50%;transform:translateY(-50%)}
 .grid.list-view .card-av{width:40px;height:40px;margin:0;font-size:15px}
@@ -179,7 +179,7 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 /* Launched dots get a soft pulsing ring via a pseudo-element animated with
    transform+opacity only (GPU-composited, no per-frame repaint). Idle dots stay
    static - this keeps idle CPU near zero even with many accounts on screen. */
-/* Green whenever the instance is up -- no separate in-app vs in-game state. */
+/* Green whenever the instance is up; no separate in-app vs in-game state. */
 .card-dot.launched{background:var(--green)}
 .card-dot.launched::after{content:'';position:absolute;inset:0;border-radius:50%;background:var(--green);opacity:.5;transform:scale(1);animation:dot-ring 1.8s ease-out infinite;will-change:transform,opacity}
 @keyframes dot-ring{0%{transform:scale(1);opacity:.5}70%,100%{transform:scale(2.6);opacity:0}}
@@ -191,10 +191,10 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .card-name{font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0;min-width:0;letter-spacing:-.02em}
 .card-uid{font-size:12px;color:var(--t3);font-weight:500;margin-bottom:14px}
 /* Always kept in flow (visibility, not display) so every card reserves the
-   same height whether or not it has a game/server target -- otherwise cards
+   same height whether or not it has a game/server target; otherwise cards
    without one shrink and mismatch height against cards that have one, since
    grid row stretch only equalizes within a row, not across rows. */
-/* height fixed explicitly -- an empty box (no gameTarget) has no content to
+/* height fixed explicitly; an empty box (no gameTarget) has no content to
    anchor a line box to, so line-height alone doesn't reserve space; nothing
    short of an explicit height keeps it identical to a box that has text. */
 .card-game{font-size:11.5px;line-height:14px;height:22px;font-weight:500;color:var(--t2);background:var(--s2);border-radius:6px;padding:4px 9px;margin-bottom:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;align-self:flex-start;max-width:100%;visibility:hidden}
@@ -241,7 +241,7 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .btn-danger:hover{background-color:rgba(239,68,68,.9);color:#fff}
 
 /* Flat raised buttons: a thin inset top highlight reads as a subtle bevel on
-   any filled button, on by default (not hover-gated) -- no gradient overlay
+   any filled button, on by default (not hover-gated); no gradient overlay
    involved, just a 1px inset line, so it doesn't drift on custom accents. */
 .btn-primary,.btn-launch{
   background-color:var(--ac);
@@ -289,7 +289,7 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .badge.muted{background:var(--s4);color:var(--t3)}
 
 /* One shared text-field look used everywhere a plain input appears (settings,
-   edit-account modal, package name, generator key) -- .sr-input/.field
+   edit-account modal, package name, generator key); .sr-input/.field
    input/.pm-input used to be three near-duplicate rules that had quietly
    drifted apart (different padding/bg/radius/font-size); consolidated so
    changing the look in one place changes it everywhere. */
@@ -345,7 +345,7 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
 .mst .material-icons-round{font-size:14px;flex-shrink:0}
 .modal-actions{display:flex;gap:7px;justify-content:flex-end;margin-top:18px}
 /* Edit-account modal: identity header, notes textarea, close affordance and a
-   full-width destructive action. Buttons keep the standard .btn shape -- only
+   full-width destructive action. Buttons keep the standard .btn shape; only
    .btn-danger-wide changes width and colour, not radius or height. */
 .modal-x{position:absolute;top:16px;right:16px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;border-radius:var(--r2);color:var(--t2);font-size:17px;line-height:1;cursor:pointer;transition:background var(--dur) var(--smooth),color var(--dur) var(--smooth)}
 .modal-x:hover{background:var(--s3);color:var(--t1)}
@@ -391,7 +391,7 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
 
 /* tab bars */
 /* Segmented-control track: one grouped surface instead of separately boxed
-   buttons -- only the active segment gets a filled pill, everything else
+   buttons; only the active segment gets a filled pill, everything else
    sits flat inside the track. */
 .tab-bar{position:relative;display:flex;gap:2px;padding:3px;margin:8px 18px 12px;flex-shrink:0;background:var(--s2);border:1px solid var(--bd);border-radius:calc(var(--r2) + 3px);width:fit-content;max-width:calc(100% - 36px);overflow-x:auto}
 /* Positioned in px by JS (positionTabSlider) since segments aren't equal
@@ -596,16 +596,6 @@ body.theme-forest{--bg:#0a1410;--s1:#0f1d16;--s2:#13251c;--s3:#1a3025;--s4:#2340
 body.theme-amber{--bg:#161106;--s1:#1e170a;--s2:#271e0d;--s3:#332813;--s4:#41331b;--bd:rgba(255,200,110,.1);--bd2:rgba(255,200,110,.2);--ac:#f59e0b;--ac2:rgba(245,158,11,.3);--ac3:rgba(245,158,11,.48)}
 body.theme-rose{--bg:#170b11;--s1:#200f18;--s2:#29131f;--s3:#351a29;--s4:#432235;--bd:rgba(255,150,190,.1);--bd2:rgba(255,150,190,.2);--ac:#fb7185;--ac2:rgba(251,113,133,.3);--ac3:rgba(251,113,133,.48)}
 body.theme-graphite{--bg:#0d0e10;--s1:#131418;--s2:#1a1c21;--s3:#23262d;--s4:#2e323a;--bd:rgba(160,170,190,.1);--bd2:rgba(160,170,190,.2);--ac:#94a3b8;--ac2:rgba(148,163,184,.28);--ac3:rgba(148,163,184,.45)}
-.credits-list{display:flex;flex-direction:column;gap:14px;max-width:760px}
-.credit-card{display:flex;align-items:center;gap:16px;background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:18px 22px;transition:border-color var(--dur) var(--smooth),transform 220ms var(--spring),box-shadow 220ms var(--smooth);box-shadow:0 1px 3px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.02)}
-.credit-card:hover{border-color:var(--bd2);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.4)}
-.credit-card:hover{border-color:var(--bd2)}
-.credit-av{width:52px;height:52px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff;background:var(--ac);flex-shrink:0}
-.credit-info{flex:1;min-width:0}
-.credit-role{font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
-.credit-name{font-size:17px;font-weight:700;color:var(--t1);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.credit-discord{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--t2);background:var(--s3);border:1px solid var(--bd);border-radius:8px;padding:8px 13px;flex-shrink:0}
-.credit-discord .material-icons-round{font-size:15px;color:var(--t3)}
 
 /* ── Context menu ────────────────────────────────────────────────────────── */
 .ctx-menu{position:fixed;z-index:9999;background:var(--s2);border:1px solid var(--bd2);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.45),0 2px 8px rgba(0,0,0,.3);padding:4px;min-width:180px;animation:ctxIn 80ms var(--smooth)}
@@ -654,3 +644,4 @@ body.theme-graphite{--bg:#0d0e10;--s1:#131418;--s2:#1a1c21;--s3:#23262d;--s4:#2e
 .log-find input{background:none;border:none;outline:none;color:var(--t1);font-family:'Inter',sans-serif;font-size:12.5px;width:180px}
 .log-find input::placeholder{color:var(--t2)}
 .log-find-count{font-size:11px;color:var(--red);min-width:60px;text-align:right}
+
