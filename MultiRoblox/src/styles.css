@@ -4,6 +4,10 @@
   --bd:rgba(255,255,255,0.07);--bd2:rgba(255,255,255,0.13);
   --t1:#f0f0f5;--t2:#aaaab2;--t3:#73737d;
   --ac:#5c5ce0;--ac2:rgba(92,92,224,0.35);--ac3:rgba(92,92,224,0.5);
+  /* Text/icon color that sits ON an accent-filled surface. Every accent
+     surface reads this instead of hardcoding #fff, so a light accent (see
+     theme-mono) can flip it to black and stay legible. */
+  --on-ac:#ffffff;
   --green:#3ecf8e;--gd:rgba(62,207,142,0.1);
   --blue:#3b82f6;--bld:rgba(59,130,246,0.1);
   --red:#f06f6f;--rd:rgba(240,111,111,0.1);
@@ -13,14 +17,34 @@
   --smooth:cubic-bezier(0.4,0,0.2,1);
   --dur:180ms;--tb:56px;--sb:230px;
 }
-body.light{
+/* Theme classes are set on <html> by the inline bootstrap in index.html so
+   the palette is in place before first paint; they are written without a
+   `body` prefix so they match either element. Equal specificity to :root,
+   and they sit later in the file, so they win. */
+.light{
   --bg:#f4f4f8;--s1:#ffffff;--s2:#ebebf0;--s3:#e0e0e8;--s4:#d0d0dc;
   --bd:rgba(0,0,0,0.08);--bd2:rgba(0,0,0,0.15);
   --t1:#0e0e1a;--t2:#555570;--t3:#9898b4;
   --ac:#5c5ce0;--ac2:rgba(92,92,224,0.3);--ac3:rgba(92,92,224,0.45);
+  --on-ac:#ffffff;
   --green:#1a9e62;--gd:rgba(26,158,98,0.1);
   --blue:#2563eb;--bld:rgba(37,99,235,0.1);
   --red:#d94f4f;--rd:rgba(217,79,79,0.1);
+}
+/* The root element paints the window ground behind <body>; without this the
+   browser's default white shows for the first frame, which reads as a flash
+   on a black theme. */
+html{background:var(--bg)}
+
+/* Applied only for the ~220ms a theme switch takes (see setTheme), so the
+   whole window cross-fades to the new palette instead of snapping. Costs
+   nothing at rest because the class isn't present then, and it is limited to
+   the color properties so it can't interfere with hover transforms. */
+.theme-anim,.theme-anim *,.theme-anim *::before,.theme-anim *::after{
+  transition:background-color 190ms var(--smooth),border-color 190ms var(--smooth),color 190ms var(--smooth),fill 190ms var(--smooth)!important;
+}
+@media (prefers-reduced-motion:reduce){
+  .theme-anim,.theme-anim *,.theme-anim *::before,.theme-anim *::after{transition:none!important}
 }
 body{
   font-family:'Inter',system-ui,sans-serif;
@@ -82,7 +106,7 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
    the active item too (nothing more specific overrides it), and since
    .nav-item sits above .nav-slider in z-order, that dark fill painted right
    over the purple pill; the "turns black on hover" bug. */
-.nav-item.active,.nav-item.active:hover,.nav-item.active:active{color:#fff;background:transparent}
+.nav-item.active,.nav-item.active:hover,.nav-item.active:active{color:var(--on-ac);background:transparent}
 .nav-item.active:hover{transform:none}
 .nav-item .material-icons-round{font-size:17px;flex-shrink:0}
 .nav-item+.nav-item{margin-top:2px}
@@ -100,7 +124,7 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .nav-div{height:1px;background:var(--bd);margin:8px 2px;flex-shrink:0}
 .nav-add{width:100%;display:none;align-items:center;gap:6px;padding:7px 10px;border-radius:var(--r2);border:1px solid var(--bd);background:transparent;color:var(--t3);cursor:pointer;font-family:'Inter',sans-serif;font-size:12px;font-weight:500;text-align:left;transition:background var(--dur) var(--smooth),color var(--dur) var(--smooth),border-color var(--dur) var(--smooth)}
 .nav-add.visible{display:flex}
-.nav-add:hover{background:var(--ac);color:#fff;border-color:var(--ac)}
+.nav-add:hover{background:var(--ac);color:var(--on-ac);border-color:var(--ac)}
 .nav-add:active{opacity:.7}
 .nav-add .material-icons-round{font-size:15px;flex-shrink:0}
 
@@ -129,12 +153,12 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .filter-menu.open{display:flex}
 .filter-menu button{display:flex;align-items:center;gap:8px;width:100%;padding:8px 11px;border:1px solid transparent;background:transparent;color:var(--t2);font-family:'Inter',sans-serif;font-size:12px;font-weight:500;text-align:left;border-radius:var(--r2);cursor:pointer;transition:background var(--dur) var(--smooth),color var(--dur) var(--smooth)}
 .filter-menu button:hover{background:var(--s3);color:var(--t1)}
-.filter-menu button.active{background-color:var(--ac);color:#fff}
+.filter-menu button.active{background-color:var(--ac);color:var(--on-ac)}
 .view-toggle{display:flex;gap:4px;height:40px;background:var(--s2);border:1px solid var(--bd);border-radius:var(--r2);padding:4px;box-shadow:inset 0 1px 3px rgba(0,0,0,.3)}
 .vt{position:relative;width:38px;height:100%;border-radius:var(--r2);border:none;background-color:transparent;color:var(--t3);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background-color var(--dur),color var(--dur),transform 220ms var(--smooth),box-shadow var(--dur)}
 .vt:hover{color:var(--t1);transform:translateY(-1px)}
 .vt:active{transform:translateY(1px);transition:transform 150ms var(--spring)}
-.vt.active{background-color:var(--ac);color:#fff;box-shadow:0 3px 8px -2px var(--ac3)}
+.vt.active{background-color:var(--ac);color:var(--on-ac);box-shadow:0 3px 8px -2px var(--ac3)}
 .vt .material-icons-round{font-size:18px}
 .grid.list-view{grid-template-columns:1fr;gap:8px}
 /* List view: compact horizontal rows; avatar to the left of a name/id stack */
@@ -160,7 +184,7 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .card.drag-list-clone .card-row{margin:0 0 0 auto;flex:0 0 auto;width:auto}
 .card.drag-list-clone .btn-launch{flex:0 0 auto;min-width:96px;padding-left:18px;padding-right:18px}
 .ph-title{font-size:28px;font-weight:700;letter-spacing:-.03em;display:flex;align-items:center;gap:11px}
-.ph-badge{font-size:13px;font-weight:600;min-width:28px;height:25px;padding:0 8px;border-radius:8px;background:var(--ac);color:#fff;display:inline-flex;align-items:center;justify-content:center;transform:translateY(1px)}
+.ph-badge{font-size:13px;font-weight:600;min-width:28px;height:25px;padding:0 8px;border-radius:8px;background:var(--ac);color:var(--on-ac);display:inline-flex;align-items:center;justify-content:center;transform:translateY(1px)}
 .ph-sub{font-size:13.5px;color:var(--t2);margin-top:5px;font-weight:400}
 
 /* scrollable areas */
@@ -229,12 +253,12 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .btn:active{transform:translateY(1px);opacity:.85}
 .btn:disabled{opacity:.35;cursor:not-allowed;transform:none !important;pointer-events:none}
 .btn .material-icons-round{font-size:13px}
-.btn-launch{flex:1;padding:9px 0;font-size:13px;background-color:var(--ac);color:#fff}
+.btn-launch{flex:1;padding:9px 0;font-size:13px;background-color:var(--ac);color:var(--on-ac)}
 .btn-edit{width:36px;background-color:var(--s2);color:var(--t2);border:1px solid var(--bd)}
 .btn-edit:hover{background-color:var(--s3);color:var(--t1)}
 .btn-del{width:36px;background-color:var(--s2);color:var(--t2);border:1px solid var(--bd)}
 .btn-del:hover{background-color:var(--rd);color:var(--red);border-color:rgba(240,111,111,.25)}
-.btn-primary{padding:8px 16px;background-color:var(--ac);color:#fff;font-size:12.5px}
+.btn-primary{padding:8px 16px;background-color:var(--ac);color:var(--on-ac);font-size:12.5px}
 .btn-ghost{padding:8px 14px;background-color:transparent;color:var(--t2);border:1px solid var(--bd);font-size:12.5px}
 .btn-ghost:hover{background-color:var(--s3);color:var(--t1);border-color:var(--bd2)}
 .btn-danger{padding:8px 14px;background-color:var(--rd);color:var(--red);font-size:12.5px}
@@ -306,7 +330,7 @@ button:focus-visible,.nav-item:focus-visible,.tab-btn:focus-visible{outline:none
 .cdd-trigger:hover{border-color:var(--bd2);background:var(--s2)}
 .cdd-trigger.open{border-color:var(--ac);box-shadow:0 0 0 3px var(--ac2);background:var(--s1)}
 .cdd-label{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
-.cdd-badge{font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;background:var(--ac);color:#fff;flex-shrink:0}
+.cdd-badge{font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;background:var(--ac);color:var(--on-ac);flex-shrink:0}
 .cdd-badge.green{background:var(--gd);color:var(--green)}
 .cdd-badge.muted{background:var(--s4);color:var(--t2)}
 .cdd-arrow{font-size:16px;color:var(--t3);transition:transform var(--dur) var(--smooth);flex-shrink:0}
@@ -415,7 +439,7 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
    guarantees a visible highlight (light tint on dark themes, dark tint on
    light themes) without hardcoding a color that only works one way. */
 .tab-btn:not(.active):hover{background:color-mix(in srgb,var(--t1) 10%,transparent);color:var(--t1)}
-.tab-btn.active{color:#fff}
+.tab-btn.active{color:var(--on-ac)}
 
 /* charts page */
 .charts-inner{flex:1;display:flex;flex-direction:column;overflow:hidden}
@@ -439,7 +463,7 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
 .toggle-trk{position:absolute;inset:0;background:var(--s4);border:1px solid var(--bd2);border-radius:10px;transition:background var(--dur) var(--smooth),border-color var(--dur) var(--smooth)}
 .toggle-trk::before{content:'';position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:transform var(--dur) var(--smooth)}
 .toggle input:checked+.toggle-trk{background-color:var(--ac);border-color:rgba(0,0,0,.2)}
-.toggle input:checked+.toggle-trk::before{transform:translateX(16px);background:#fff}
+.toggle input:checked+.toggle-trk::before{transform:translateX(16px);background:var(--on-ac)}
 .toggle input:focus-visible+.toggle-trk{box-shadow:0 0 0 3px var(--ac2)}
 .toggle.sm{width:30px;height:17px}
 .toggle.sm .toggle-trk::before{width:11px;height:11px}
@@ -510,14 +534,14 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
 .pm-row{display:flex;align-items:center;gap:13px;padding:11px 13px;border-radius:12px;border:1px solid var(--bd);background:var(--s2);cursor:pointer;transition:border-color var(--dur),background var(--dur)}
 .pm-row input{display:none}
 .pm-row:hover{border-color:var(--bd2)}
-.pm-row:has(input:checked){border-color:var(--ac);background:rgba(92,92,224,.08)}
+.pm-row:has(input:checked){border-color:var(--ac);background:color-mix(in srgb,var(--ac) 9%,transparent)}
 .pm-av{width:38px;height:38px;border-radius:7px;background:var(--s3);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;flex-shrink:0;overflow:hidden}
 .pm-av img{width:100%;height:100%;object-fit:cover}
 .pm-info{flex:1;min-width:0;display:flex;flex-direction:column}
 .pm-name{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pm-meta{font-size:11.5px;color:var(--t3);margin-top:1px}
 .pm-check{width:22px;height:22px;border-radius:6px;border:1.5px solid var(--bd2);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background-color var(--dur),border-color var(--dur)}
-.pm-check .material-icons-round{font-size:16px;color:#fff;opacity:0;transition:opacity var(--dur)}
+.pm-check .material-icons-round{font-size:16px;color:var(--on-ac);opacity:0;transition:opacity var(--dur)}
 .pm-row:has(input:checked) .pm-check{background-color:var(--ac);border-color:var(--ac)}
 .pm-row:has(input:checked) .pm-check .material-icons-round{opacity:1}
 .pm-foot{display:flex;justify-content:flex-end;gap:10px;padding:18px 24px 22px;border-top:1px solid var(--bd)}
@@ -537,10 +561,10 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
 /* region picker */
 .region-picker-wrap{position:relative;width:100%;max-height:60vh;overflow:auto;border-radius:10px;border:1px solid var(--bd);background:var(--s2);margin:14px 0;cursor:crosshair;user-select:none}
 .region-picker-wrap img{display:block;width:100%;height:auto;pointer-events:none}
-.region-picker-box{position:absolute;border:2px solid var(--ac);background:rgba(92,92,224,.18);cursor:pointer}
+.region-picker-box{position:absolute;border:2px solid var(--ac);background:color-mix(in srgb,var(--ac) 18%,transparent);cursor:pointer}
 .region-picker-box:hover{background:rgba(239,68,68,.25);border-color:var(--red)}
 .region-picker-box-draft{border-style:dashed;cursor:crosshair;pointer-events:none}
-.region-picker-box-draft:hover{background:rgba(92,92,224,.18);border-color:var(--ac)}
+.region-picker-box-draft:hover{background:color-mix(in srgb,var(--ac) 18%,transparent);border-color:var(--ac)}
 
 /* tab panel transitions */
 .tab-panel{display:none;flex:1;flex-direction:column;overflow:hidden;animation:panelIn 160ms var(--smooth) both}
@@ -565,7 +589,7 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
   transition:border-color 200ms var(--smooth)}
 .theme-card:hover{border-color:var(--bd2)}
 .theme-card.sel{border-color:var(--ac);box-shadow:0 0 0 1px var(--ac)}
-.tc-mini{position:relative;border-radius:8px;overflow:hidden;height:108px;border:1px solid rgba(255,255,255,.07);isolation:isolate}
+.tc-mini{position:relative;border-radius:8px;overflow:hidden;height:108px;border:1px solid var(--bd);isolation:isolate}
 .tcm-bg{position:absolute;inset:0;background:var(--m-bg);z-index:0}
 .tcm-side{position:absolute;left:7px;top:8px;bottom:8px;width:31px;border-radius:7px;z-index:1;background:var(--m-panel);
   display:flex;flex-direction:column;gap:4px;padding:7px 5px;border:1px solid var(--m-bd,transparent);
@@ -581,21 +605,50 @@ input[type=password]::-ms-reveal,input[type=password]::-ms-clear{display:none}
 .tc-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 2px}
 .tc-name{font-size:12.5px;font-weight:600;color:var(--t1);letter-spacing:-.01em;display:flex;align-items:center;gap:7px}
 .tc-sws{display:flex;gap:4px}
-.tc-sw{width:12px;height:12px;border-radius:4px;border:1px solid rgba(255,255,255,.2)}
-.tc-check{width:17px;height:17px;border-radius:50%;background:var(--ac);color:#fff;display:none;align-items:center;justify-content:center;flex-shrink:0}
+.tc-sw{width:12px;height:12px;border-radius:4px;border:1px solid var(--bd2)}
+.tc-check{width:17px;height:17px;border-radius:50%;background:var(--ac);color:var(--on-ac);display:none;align-items:center;justify-content:center;flex-shrink:0}
 .theme-card.sel .tc-check{display:inline-flex}
 .tc-check .material-icons-round{font-size:11px}
 /* ============ accent themes (dark-based recolors) ============ */
-body.theme-midnight{--bg:#0a0e1a;--s1:#0f1424;--s2:#141a2e;--s3:#1b2238;--s4:#232c46;--bd:rgba(120,150,255,.1);--bd2:rgba(120,150,255,.2);--ac:#4f7cff;--ac2:rgba(79,124,255,.35);--ac3:rgba(79,124,255,.5)}
-body.theme-aurora{--bg:#07140f;--s1:#0c1a14;--s2:#11221b;--s3:#172c23;--s4:#1f382d;--bd:rgba(120,255,220,.1);--bd2:rgba(120,255,220,.2);--ac:#2dd4bf;--ac2:rgba(45,212,191,.32);--ac3:rgba(45,212,191,.48);--green:#34e2b0;--gd:rgba(52,226,176,.12)}
-body.theme-sunset{--bg:#170b12;--s1:#1f0f18;--s2:#281320;--s3:#331a29;--s4:#412235;--bd:rgba(255,170,140,.1);--bd2:rgba(255,170,140,.2);--ac:#ff7a59;--ac2:rgba(255,122,89,.32);--ac3:rgba(255,122,89,.5)}
-body.theme-crimson{--bg:#160a0c;--s1:#1e0e11;--s2:#271216;--s3:#33181d;--s4:#412027;--bd:rgba(255,120,130,.1);--bd2:rgba(255,120,130,.2);--ac:#f43f5e;--ac2:rgba(244,63,94,.32);--ac3:rgba(244,63,94,.5)}
-body.theme-ocean{--bg:#07121a;--s1:#0b1925;--s2:#0f2030;--s3:#15293d;--s4:#1d364f;--bd:rgba(110,190,255,.1);--bd2:rgba(110,190,255,.2);--ac:#38bdf8;--ac2:rgba(56,189,248,.3);--ac3:rgba(56,189,248,.48)}
-body.theme-grape{--bg:#120a1c;--s1:#190f27;--s2:#211333;--s3:#2b1944;--s4:#382158;--bd:rgba(190,140,255,.1);--bd2:rgba(190,140,255,.2);--ac:#a855f7;--ac2:rgba(168,85,247,.32);--ac3:rgba(168,85,247,.5)}
-body.theme-forest{--bg:#0a1410;--s1:#0f1d16;--s2:#13251c;--s3:#1a3025;--s4:#234031;--bd:rgba(140,220,160,.1);--bd2:rgba(140,220,160,.2);--ac:#4ade80;--ac2:rgba(74,222,128,.3);--ac3:rgba(74,222,128,.48);--green:#4ade80;--gd:rgba(74,222,128,.12)}
-body.theme-amber{--bg:#161106;--s1:#1e170a;--s2:#271e0d;--s3:#332813;--s4:#41331b;--bd:rgba(255,200,110,.1);--bd2:rgba(255,200,110,.2);--ac:#f59e0b;--ac2:rgba(245,158,11,.3);--ac3:rgba(245,158,11,.48)}
-body.theme-rose{--bg:#170b11;--s1:#200f18;--s2:#29131f;--s3:#351a29;--s4:#432235;--bd:rgba(255,150,190,.1);--bd2:rgba(255,150,190,.2);--ac:#fb7185;--ac2:rgba(251,113,133,.3);--ac3:rgba(251,113,133,.48)}
-body.theme-graphite{--bg:#0d0e10;--s1:#131418;--s2:#1a1c21;--s3:#23262d;--s4:#2e323a;--bd:rgba(160,170,190,.1);--bd2:rgba(160,170,190,.2);--ac:#94a3b8;--ac2:rgba(148,163,184,.28);--ac3:rgba(148,163,184,.45)}
+.theme-midnight{--bg:#0a0e1a;--s1:#0f1424;--s2:#141a2e;--s3:#1b2238;--s4:#232c46;--bd:rgba(120,150,255,.1);--bd2:rgba(120,150,255,.2);--ac:#4f7cff;--ac2:rgba(79,124,255,.35);--ac3:rgba(79,124,255,.5)}
+.theme-aurora{--bg:#07140f;--s1:#0c1a14;--s2:#11221b;--s3:#172c23;--s4:#1f382d;--bd:rgba(120,255,220,.1);--bd2:rgba(120,255,220,.2);--ac:#2dd4bf;--ac2:rgba(45,212,191,.32);--ac3:rgba(45,212,191,.48);--on-ac:#07140f;--green:#34e2b0;--gd:rgba(52,226,176,.12)}
+.theme-sunset{--bg:#170b12;--s1:#1f0f18;--s2:#281320;--s3:#331a29;--s4:#412235;--bd:rgba(255,170,140,.1);--bd2:rgba(255,170,140,.2);--ac:#ff7a59;--ac2:rgba(255,122,89,.32);--ac3:rgba(255,122,89,.5);--on-ac:#170b12}
+.theme-crimson{--bg:#160a0c;--s1:#1e0e11;--s2:#271216;--s3:#33181d;--s4:#412027;--bd:rgba(255,120,130,.1);--bd2:rgba(255,120,130,.2);--ac:#f43f5e;--ac2:rgba(244,63,94,.32);--ac3:rgba(244,63,94,.5)}
+.theme-ocean{--bg:#07121a;--s1:#0b1925;--s2:#0f2030;--s3:#15293d;--s4:#1d364f;--bd:rgba(110,190,255,.1);--bd2:rgba(110,190,255,.2);--ac:#38bdf8;--ac2:rgba(56,189,248,.3);--ac3:rgba(56,189,248,.48);--on-ac:#07121a}
+.theme-grape{--bg:#120a1c;--s1:#190f27;--s2:#211333;--s3:#2b1944;--s4:#382158;--bd:rgba(190,140,255,.1);--bd2:rgba(190,140,255,.2);--ac:#a855f7;--ac2:rgba(168,85,247,.32);--ac3:rgba(168,85,247,.5)}
+.theme-forest{--bg:#0a1410;--s1:#0f1d16;--s2:#13251c;--s3:#1a3025;--s4:#234031;--bd:rgba(140,220,160,.1);--bd2:rgba(140,220,160,.2);--ac:#4ade80;--ac2:rgba(74,222,128,.3);--ac3:rgba(74,222,128,.48);--on-ac:#0a1410;--green:#4ade80;--gd:rgba(74,222,128,.12)}
+.theme-amber{--bg:#161106;--s1:#1e170a;--s2:#271e0d;--s3:#332813;--s4:#41331b;--bd:rgba(255,200,110,.1);--bd2:rgba(255,200,110,.2);--ac:#f59e0b;--ac2:rgba(245,158,11,.3);--ac3:rgba(245,158,11,.48);--on-ac:#161106}
+.theme-rose{--bg:#170b11;--s1:#200f18;--s2:#29131f;--s3:#351a29;--s4:#432235;--bd:rgba(255,150,190,.1);--bd2:rgba(255,150,190,.2);--ac:#fb7185;--ac2:rgba(251,113,133,.3);--ac3:rgba(251,113,133,.48);--on-ac:#170b11}
+.theme-graphite{--bg:#0d0e10;--s1:#131418;--s2:#1a1c21;--s3:#23262d;--s4:#2e323a;--bd:rgba(160,170,190,.1);--bd2:rgba(160,170,190,.2);--ac:#94a3b8;--ac2:rgba(148,163,184,.28);--ac3:rgba(148,163,184,.45);--on-ac:#0d0e10}
+
+/* ============ Mono: pure black & white, zero hue ============
+   The only theme whose accent is lighter than its text surfaces, which is
+   exactly what --on-ac exists for: every accent-filled control flips its
+   label to black here. Status colors stay monochrome and are separated by
+   luminance (ok = white, error = mid grey) rather than hue; the icons that
+   accompany them already carry the meaning. */
+.theme-mono{
+  --bg:#141414;--s1:#1a1a1a;--s2:#202020;--s3:#282828;--s4:#333333;
+  --bd:rgba(255,255,255,.10);--bd2:rgba(255,255,255,.22);
+  --t1:#ffffff;--t2:#c4c4c4;--t3:#8a8a8a;
+  --ac:#ffffff;--ac2:rgba(255,255,255,.18);--ac3:rgba(255,255,255,.24);--ac-h:#ffffff;
+  --on-ac:#141414;
+  --green:#ffffff;--gd:rgba(255,255,255,.10);
+  --blue:#d4d4d4;--bld:rgba(255,255,255,.08);
+  /* The one hue mono keeps. Destructive actions (Kill Roblox, delete, dead
+     cookie) are the only place where losing the color costs real meaning
+     rather than just decoration, so red stays red here while ok/info states
+     go monochrome. */
+  --red:#f06f6f;--rd:rgba(240,111,111,.12);
+}
+/* The glossy inset highlight and colored glow that give the accent buttons
+   depth on hue-based themes just read as grime on a flat white fill, so mono
+   trades them for a crisp lift. */
+.theme-mono .btn-primary,.theme-mono .btn-launch{box-shadow:none}
+.theme-mono .btn-primary:hover,.theme-mono .btn-launch:hover{box-shadow:0 4px 14px -4px rgba(255,255,255,.28)}
+.theme-mono .btn.btn-primary:active,.theme-mono .btn.btn-launch:active{box-shadow:none}
+.theme-mono .nav-slider,.theme-mono .tab-slider{box-shadow:none}
+.theme-mono .vt.active{box-shadow:none}
 
 /* ── Context menu ────────────────────────────────────────────────────────── */
 .ctx-menu{position:fixed;z-index:9999;background:var(--s2);border:1px solid var(--bd2);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.45),0 2px 8px rgba(0,0,0,.3);padding:4px;min-width:180px;animation:ctxIn 80ms var(--smooth)}

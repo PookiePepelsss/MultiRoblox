@@ -277,31 +277,53 @@ async function continueInit() {
 init();
 
 // ── Theme ──────────────────────────────────────────────────────────────────
-var THEMES = ['dark','light','midnight','aurora','sunset','crimson','ocean','grape','forest','amber','rose','graphite'];
+var THEMES = ['dark','light','mono','midnight','aurora','sunset','crimson','ocean','grape','forest','amber','rose','graphite'];
+// Set by the inline bootstrap in index.html; the literal is only a fallback
+// for the case where that script somehow didn't run.
+var DEFAULT_THEME = window.DEFAULT_THEME || 'dark';
+// Theme classes live on <html>, not <body>: index.html's inline bootstrap
+// sets them before the document body is even parsed, which is the only way to
+// have the palette in place for the first paint. Keep this in sync with that
+// bootstrap's DEFAULT_THEME.
 function applyTheme(name) {
-  if (THEMES.indexOf(name) < 0) name = 'dark';
-  document.body.classList.remove('light');
-  THEMES.forEach(t => { if (t !== 'dark' && t !== 'light') document.body.classList.remove('theme-' + t); });
-  if (name === 'light') document.body.classList.add('light');
-  else if (name !== 'dark') document.body.classList.add('theme-' + name);
+  if (THEMES.indexOf(name) < 0) name = DEFAULT_THEME;
+  const root = document.documentElement;
+  root.classList.remove('light');
+  THEMES.forEach(t => { if (t !== 'dark' && t !== 'light') root.classList.remove('theme-' + t); });
+  if (name === 'light') root.classList.add('light');
+  else if (name !== 'dark') root.classList.add('theme-' + name);
   document.querySelectorAll('.theme-card').forEach(c => c.classList.toggle('sel', c.dataset.theme === name));
 }
-function currentTheme() { try { return localStorage.getItem('ui-theme') || 'dark'; } catch { return 'dark'; } }
+function currentTheme() { try { return localStorage.getItem('ui-theme') || DEFAULT_THEME; } catch { return DEFAULT_THEME; } }
+let _themeAnimTimer = null;
 function setTheme(name) {
-  if (THEMES.indexOf(name) < 0) name = 'dark';
+  if (THEMES.indexOf(name) < 0) name = DEFAULT_THEME;
+  // Cross-fade the palette, but only when the theme actually changes and only
+  // once the first paint is behind us: doing it on the startup call would
+  // animate the whole window in from the stylesheet defaults, which is the
+  // very flash the inline bootstrap exists to prevent.
+  const root = document.documentElement;
+  if (document.readyState !== 'loading' && name !== currentTheme()) {
+    root.classList.add('theme-anim');
+    clearTimeout(_themeAnimTimer);
+    _themeAnimTimer = setTimeout(() => root.classList.remove('theme-anim'), 220);
+  }
   applyTheme(name);
   try { localStorage.setItem('ui-theme', name); } catch {}
 }
 function openDiscord() {
   api.openExternal('https://discord.gg/kZ8MZZ8dTF');
 }
+// Re-runs what the inline bootstrap already did, so the theme-card selection
+// state gets marked and the choice is persisted for anyone still on the old
+// pre-'ui-theme' key. Applying the same class twice is a no-op.
 (function() {
   let t;
   try {
     t = localStorage.getItem('ui-theme');
-    if (!t) { const old = localStorage.getItem('theme'); t = (old === 'light') ? 'light' : 'dark'; }
-  } catch { t = 'dark'; }
-  setTheme(t || 'dark');
+    if (!t) { const old = localStorage.getItem('theme'); t = (old === 'light') ? 'light' : DEFAULT_THEME; }
+  } catch { t = DEFAULT_THEME; }
+  setTheme(t || DEFAULT_THEME);
 })();
 
 // ── BloxGen API key persistence ────────────────────────────────────────────
@@ -389,6 +411,10 @@ function applySettings() {
   if (relaunch) relaunch.checked = !!settings.autoRelaunch;
   const lowPriority = document.getElementById('set-lowpriority');
   if (lowPriority) lowPriority.checked = settings.lowPriorityMultiInstance !== false;
+  // Off by default: quitting on close is the long-standing behaviour, and
+  // silently vanishing into the tray instead is a surprise worth opting into.
+  const hideTray = document.getElementById('set-hidetotray');
+  if (hideTray) hideTray.checked = !!settings.hideToTray;
   const lockChannel = document.getElementById('set-lockchannel');
   if (lockChannel) lockChannel.checked = !!settings.lockChannel;
   robloxChannelUpdateUI(['current','custom'].includes(settings.robloxChannel) ? settings.robloxChannel : 'current');
@@ -517,6 +543,16 @@ function toggleLowPriority() {
   settings.lowPriorityMultiInstance = on;
   api.saveSettings({ lowPriorityMultiInstance: on });
   toast(on ? 'Multi-instance priority lowering on' : 'Multi-instance priority lowering off', on ? 'ok' : 'err');
+}
+function toggleHideToTray() {
+  const el = document.getElementById('set-hidetotray');
+  const on = el.checked;
+  settings.hideToTray = on;
+  api.saveSettings({ hideToTray: on });
+  // Persist first, then reconcile the icon: the backend reads the saved
+  // setting on every close, and apply_setting only creates/removes the icon.
+  api.setHideToTray(on);
+  toast(on ? 'Closing will hide to the system tray' : 'Closing will quit MultiRoblox', on ? 'ok' : 'err');
 }
 function toggleLockChannel() {
   const el = document.getElementById('set-lockchannel');
@@ -656,8 +692,13 @@ function goTo(p) {
   }
   if (p === 'logs') renderLogs();
   if (p === 'charts') {
+    chartsOnEnter();
     if (!chartsLoaded) loadCharts();
     positionTabSlider(document.getElementById('ctab-popular')?.closest('.tab-bar'));
+  } else {
+    // Start the countdown to dropping the charts payload. Bouncing to another
+    // tab and straight back inside the window costs nothing.
+    chartsOnLeave();
   }
   if (p === 'packages') renderPackages();
   if (p === 'mixer') mixInit();
@@ -920,9 +961,15 @@ async function checkCookieHealth(list) {
       _cookieStatus[a.id] = 'checking';
       try {
         const res = await api.validateCookie(a.cookie);
-        const st = (res && res.ok) ? 'ok' : 'dead';
+        // reachable:false means we never got an answer out of Roblox (DNS,
+        // timeout, no connection), which says nothing about the cookie.
+        // Marking those 'dead' turned any brief network drop into every
+        // account showing EXPIRED. Leave them unknown so the next pass
+        // re-checks instead of accusing a good cookie.
+        const st = (res && res.ok) ? 'ok' : (res && res.reachable === false ? 'unknown' : 'dead');
         _cookieStatus[a.id] = st;
         if (st === 'dead') logEntry('warn', 'cookie', `Cookie invalid for ${a.username || a.id}`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
+        else if (st === 'unknown') logEntry('warn', 'cookie', `Could not reach Roblox to check ${a.username || a.id}`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
         else logEntry('info', 'cookie', `Cookie valid for ${a.username || a.id}`, { accountId: a.id, username: a.username || null, userId: a.userId || null });
       } catch { _cookieStatus[a.id] = 'unknown'; logEntry('warn', 'cookie', `Cookie check failed for ${a.username || a.id}`, { accountId: a.id }); }
       applyCookieStatus(a.id);
@@ -954,6 +1001,13 @@ async function recheckAllCookies(force) {
     try {
       const res = await api.validateCookie(a.cookie);
       _cookieCheckedAt[a.id] = Date.now();
+      // Roblox unreachable tells us nothing about the cookie. This pass runs
+      // every 60s, so treating a transport failure as 'dead' meant one blip
+      // flipped every account to EXPIRED. Hold the previous verdict instead.
+      if (res && !res.ok && res.reachable === false) {
+        _cookieStatus[a.id] = prev || 'unknown';
+        return;
+      }
       const next = (res && res.ok) ? 'ok' : 'dead';
       if (next !== prev) {
         _cookieStatus[a.id] = next;
@@ -1492,8 +1546,26 @@ function confirmAction(message, onConfirm) {
 async function removeAcc(id) {
   const a = accounts.find(x => x.id === id);
   if (!a) return;
-  confirmAction('Remove "' + a.username + '"? This cannot be undone.', async () => {
+  // Removing the account drops its PID from the backend's tracking, so an
+  // instance left running afterwards is orphaned: still open, but no longer
+  // something Kill Roblox can see or close. Say so up front and close it as
+  // part of the removal rather than leaving a session nothing can reach.
+  const wasRunning = _launchedIds.has(id);
+  const msg = wasRunning
+    ? 'Remove "' + a.username + '"? Its running Roblox instance will be closed. This cannot be undone.'
+    : 'Remove "' + a.username + '"? This cannot be undone.';
+  confirmAction(msg, async () => {
+    if (wasRunning) { try { await api.killOneRoblox(id); } catch {} }
     await api.removeAccount(id); accounts = accounts.filter(x => x.id !== id); render();
+    // Drop per-account UI bookkeeping so nothing keeps referring to it.
+    _launchedIds.delete(id);
+    delete _cookieStatus[id];
+    delete _cookieCheckedAt[id];
+    delete _gameNameCache[id];
+    // launchAcc is module-level and holds a full copy of the account incl. its
+    // cookie. Left dangling, the still-open launch modal would happily start
+    // the account that was just deleted.
+    if (launchAcc && launchAcc.id === id) { launchAcc = null; closeModal('m-launch'); }
     if (packages.some(p => p.accountIds.includes(id))) {
       packages.forEach(p => { p.accountIds = p.accountIds.filter(aid => aid !== id); });
       api.savePackages(packages);
@@ -1506,12 +1578,18 @@ async function removeAcc(id) {
 async function clearAll() {
   if (!accounts.length) return;
   const genCount = _genHistory.length;
+  // Same orphaning problem as removeAcc, for every running account at once.
+  const runningCount = accounts.filter(a => _launchedIds.has(a.id)).length;
   const msg = 'Remove all ' + accounts.length + ' account' + (accounts.length === 1 ? '' : 's')
     + (genCount ? ' and ' + genCount + ' generated account' + (genCount === 1 ? '' : 's') + ' from the generator history' : '')
-    + '? This cannot be undone.';
+    + '? '
+    + (runningCount ? runningCount + ' running Roblox instance' + (runningCount === 1 ? '' : 's') + ' will be closed. ' : '')
+    + 'This cannot be undone.';
   confirmAction(msg, async () => {
+    if (runningCount) { try { await api.killAllRoblox(); } catch {} }
     for (const a of accounts) { await api.removeAccount(a.id); forgetTrackingAccount(a.id); }
     accounts = []; render(); document.getElementById('stat-count').textContent = '0';
+    _launchedIds.clear();
     packages.forEach(p => { p.accountIds = []; });
     api.savePackages(packages);
     renderPackages();
@@ -1571,11 +1649,24 @@ async function doLaunch() {
   _launchingId = launchAcc.id;
   btn.disabled = true; btn.innerHTML = '<div class="spin"></div>Launching';
   setStatus('launch-status', 'load', '<div class="spin"></div>Getting auth ticket\u2026');
-  // Flip to "Spawning" the instant Roblox's process exists (before the IPC response returns)
-  let _unlistenStarted;
+  // Flip to "Roblox is starting" the instant the process exists, which the
+  // backend emits well before the launch call itself resolves.
+  //
+  // listen() is async, so it can hand back its unlisten AFTER the launch has
+  // already finished and run the teardown below; `launchDone` is what makes
+  // the late arrival tear itself down instead of leaking a listener (and a
+  // stale setStatus write) on every single launch. The account id is captured
+  // by value because `launchAcc` is module-level and points at a different
+  // account as soon as the user opens another launch modal.
+  const startedForId = launchAcc.id;
+  let launchDone = false, unlistenStarted = null;
   api.onRobloxStarted(id => {
-    if (id === launchAcc.id) setStatus('launch-status', 'load', '<div class="spin"></div>Roblox is starting\u2026');
-  }).then(u => { _unlistenStarted = u; });
+    if (!launchDone && id === startedForId) {
+      setStatus('launch-status', 'load', '<div class="spin"></div>Roblox is starting\u2026');
+    }
+  }).then(u => {
+    if (launchDone) { try { u(); } catch {} } else { unlistenStarted = u; }
+  }).catch(() => {});
   logEntry('info', 'launch', `Launching Roblox for ${launchAcc.username || launchAcc.id}...`, { accountId: launchAcc.id, username: launchAcc.username, userId: launchAcc.userId, target: launchAcc.gameTarget || 'Roblox home' });
   let res;
   try {
@@ -1587,7 +1678,8 @@ async function doLaunch() {
     res = { success: false, error: e?.message || String(e) };
   }
   _launchingId = null;
-  if (_unlistenStarted) { try { _unlistenStarted(); } catch {} }
+  launchDone = true;
+  if (unlistenStarted) { try { unlistenStarted(); } catch {} }
   if (res.cancelled) {
     // The user already asked for this and the modal is closing - don't shout
     // an error at them on the way out.
@@ -1936,6 +2028,107 @@ let chartTab = 'popular';
 let allCharts = {};
 let chartsLoaded = false;
 
+// ── Charts memory management ──────────────────────────────────────────────
+// Charts holds the heaviest payload in the app: three sorts of ~50 games each,
+// every card carrying a 512x512 PNG. Decoded, that is tens of MB of bitmap the
+// browser keeps resident for a page the user may have looked at once. Two
+// levels of unloading, both on the same 10s delay so a quick scroll-back or a
+// tab bounce never pays to re-fetch:
+//
+//   1. Per image: a card scrolled out of the list drops its src, and reloads
+//      it when it scrolls back. The URL lives on data-src so nothing is lost.
+//   2. Whole page: leaving the Charts tab drops the game data and the grid DOM
+//      entirely, so returning re-fetches fresh (which is what you want from a
+//      "top playing now" list anyway).
+const CHART_UNLOAD_MS = 10000;
+let _chartObserver = null;
+const _chartImgTimers = new Map(); // img element -> pending unload timeout
+let _chartsIdleTimer = null;
+
+function _chartLoadImg(img) {
+  const src = img.dataset.src;
+  if (src && img.getAttribute('src') !== src) img.setAttribute('src', src);
+}
+
+function _chartUnloadImg(img) {
+  if (!img.hasAttribute('src')) return;
+  // Removing src can raise the element's error event; flag it so the handler
+  // can tell our own unload from a genuinely broken image and doesn't swap in
+  // the "no thumbnail" placeholder permanently.
+  img.dataset.unloading = '1';
+  img.removeAttribute('src');
+  setTimeout(() => { delete img.dataset.unloading; }, 0);
+}
+
+function _chartThumbError(img) {
+  if (img.dataset.unloading === '1') return;
+  img.outerHTML = '<div class="chart-card-thumb-ph"><span class="material-icons-round">videogame_asset</span></div>';
+}
+
+function _chartClearImgTimers() {
+  _chartImgTimers.forEach(t => clearTimeout(t));
+  _chartImgTimers.clear();
+}
+
+/// Rebuilt on every render, since the previous grid's elements are gone.
+function _chartObserveImages() {
+  if (_chartObserver) _chartObserver.disconnect();
+  _chartClearImgTimers();
+  const grid = document.getElementById('charts-grid');
+  if (!grid || typeof IntersectionObserver === 'undefined') {
+    // No observer support: just load everything, same as the old behaviour.
+    if (grid) grid.querySelectorAll('img.chart-card-thumb').forEach(_chartLoadImg);
+    return;
+  }
+  _chartObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const img = e.target;
+      const pending = _chartImgTimers.get(img);
+      if (e.isIntersecting) {
+        if (pending) { clearTimeout(pending); _chartImgTimers.delete(img); }
+        _chartLoadImg(img);
+      } else if (!pending) {
+        _chartImgTimers.set(img, setTimeout(() => {
+          _chartImgTimers.delete(img);
+          _chartUnloadImg(img);
+        }, CHART_UNLOAD_MS));
+      }
+    }
+  }, {
+    root: document.querySelector('.charts-scroll'),
+    // Start fetching just before a card scrolls in, so it is rarely blank.
+    rootMargin: '250px 0px',
+  });
+  grid.querySelectorAll('img.chart-card-thumb').forEach(img => _chartObserver.observe(img));
+}
+
+/// Drops everything Charts holds. Safe to call when already unloaded.
+function unloadCharts() {
+  _chartsLoadSeq++; // strand any fetch still in flight
+  if (_chartObserver) { _chartObserver.disconnect(); _chartObserver = null; }
+  _chartClearImgTimers();
+  const grid = document.getElementById('charts-grid');
+  if (grid) { grid.innerHTML = ''; grid.style.display = 'none'; }
+  const empty = document.getElementById('charts-empty');
+  if (empty) empty.style.display = 'none';
+  allCharts = {};
+  _chartGameMap = {};
+  chartsLoaded = false;
+}
+
+function chartsOnEnter() {
+  clearTimeout(_chartsIdleTimer);
+  _chartsIdleTimer = null;
+}
+
+function chartsOnLeave() {
+  clearTimeout(_chartsIdleTimer);
+  _chartsIdleTimer = setTimeout(() => {
+    _chartsIdleTimer = null;
+    unloadCharts();
+  }, CHART_UNLOAD_MS);
+}
+
 function switchChartTab(tab) {
   chartTab = tab;
   document.querySelectorAll('#page-charts .tab-btn').forEach(t => t.classList.remove('active'));
@@ -1946,11 +2139,19 @@ function switchChartTab(tab) {
   positionTabSlider(document.getElementById('ctab-' + tab).closest('.tab-bar'));
 }
 
+// Bumped on every load and by unloadCharts, so a fetch that finishes after the
+// user has navigated away (or hit Refresh again) is discarded instead of
+// repopulating the data we just dropped.
+let _chartsLoadSeq = 0;
+
 async function loadCharts() {
   const grid = document.getElementById('charts-grid');
   const loading = document.getElementById('charts-loading');
   const empty = document.getElementById('charts-empty');
   chartsLoaded = false;
+  const seq = ++_chartsLoadSeq;
+  // Landing here means the user is on the tab; cancel any pending unload.
+  chartsOnEnter();
   grid.style.display = 'none'; empty.style.display = 'none'; loading.style.display = 'flex';
 
   try {
@@ -1960,11 +2161,13 @@ async function loadCharts() {
       fetchRobloxGames('top-rated'),
       fetchRobloxGames('top-earning'),
     ]);
+    if (seq !== _chartsLoadSeq) return; // superseded or unloaded while fetching
     allCharts = { popular, trending, favorited };
     chartsLoaded = true;
     loading.style.display = 'none';
     renderCharts(allCharts[chartTab] || [], false);
   } catch(e) {
+    if (seq !== _chartsLoadSeq) return;
     console.error('Charts load error:', e);
     loading.style.display = 'none';
     empty.style.display = 'flex';
@@ -2036,8 +2239,11 @@ function renderCharts(games, searchMode) {
     // has no ranking to show, so the overlay badge is skipped there instead of
     // labelling every card with the same "Search result" text.
     const rankLabel = searchMode ? '' : `<div class="chart-card-rank">#${i + 1}</div>`;
+    // src is set by the IntersectionObserver, not here: a chart is ~50 cards
+    // of 512x512 PNG, and loading them all up front is what made this tab
+    // expensive. The URL rides on data-src so it can be dropped and restored.
     const thumb = g.thumbUrl
-      ? `<img class="chart-card-thumb" src="${esc(g.thumbUrl)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=chart-card-thumb-ph><span class=material-icons-round>videogame_asset</span></div>'"/>`
+      ? `<img class="chart-card-thumb" data-src="${esc(g.thumbUrl)}" alt="" onerror="_chartThumbError(this)"/>`
       : `<div class="chart-card-thumb-ph"><span class="material-icons-round">videogame_asset</span></div>`;
     return `<div class="chart-card" style="animation-delay:${i * 12}ms" onclick="openGameModal(${i})" title="View game info">
       ${thumb}
@@ -2048,6 +2254,7 @@ function renderCharts(games, searchMode) {
       </div>
     </div>`;
   }).join('');
+  _chartObserveImages();
 }
 
 async function searchRobloxGames(query) {

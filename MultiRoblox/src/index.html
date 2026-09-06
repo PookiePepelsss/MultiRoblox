@@ -8,6 +8,27 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/>
 <link rel="stylesheet" href="styles.css"/>
+<script>
+/* Theme bootstrap. Must stay inline and in <head>: renderer.js is loaded at
+   the end of <body>, so leaving the theme to it means the whole window paints
+   in the stylesheet's default palette first and then snaps to the real one.
+   That flash is glaring now the default is a pure-black theme.
+
+   Only the class is set here; renderer.js re-applies the same value later to
+   mark the selected theme card. Deliberately dependency-free and wrapped in
+   try/catch so a blocked localStorage can never stop the app from loading. */
+window.DEFAULT_THEME = 'dark';
+(function () {
+  var t;
+  try {
+    t = localStorage.getItem('ui-theme');
+    if (!t) { t = localStorage.getItem('theme') === 'light' ? 'light' : window.DEFAULT_THEME; }
+  } catch (e) { t = window.DEFAULT_THEME; }
+  var root = document.documentElement;
+  if (t === 'light') root.classList.add('light');
+  else if (t && t !== 'dark') root.classList.add('theme-' + t);
+})();
+</script>
 </head>
 <body>
 <div id="titlebar">
@@ -361,6 +382,11 @@
             <div class="sr"><div class="sr-left"><div class="sr-label">Accounts saved</div></div><span class="badge" id="stat-count">0</span></div>
             <div class="sr"><div class="sr-left"><div class="sr-label">Roblox version</div></div><span class="badge" id="stat-rblx-ver">-</span></div>
           </div>
+          <!-- Window behaviour -->
+          <div class="sc">
+            <div class="sc-head">Window</div>
+            <div class="sr"><div class="sr-left"><div class="sr-label">Hide to system tray</div><div class="sr-desc">Closing the window keeps MultiRoblox running in the notification area instead of quitting, so running accounts stay up. Click the tray icon to reopen it, or right-click it to quit.</div></div><label class="toggle"><input type="checkbox" id="set-hidetotray" onchange="toggleHideToTray()"/><span class="toggle-trk"></span></label></div>
+          </div>
           <!-- Multi-instance -->
           <div class="sc">
             <div class="sc-head">Multi-Instance</div>
@@ -534,6 +560,17 @@
               <div class="tc-foot">
                 <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span>Light</span>
                 <span class="tc-sws"><span class="tc-sw" style="background:#f4f4f8"></span><span class="tc-sw" style="background:#ffffff"></span><span class="tc-sw" style="background:#5c5ce0"></span></span>
+              </div>
+            </div>
+            <div class="theme-card" data-theme="mono" onclick="setTheme('mono')" role="button" tabindex="0" aria-label="Mono theme">
+              <div class="tc-mini" style="--m-bg:#141414;--m-panel:#202020;--m-ac:#ffffff;--m-text:#ffffff;--m-dim:rgba(255,255,255,.22);--m-bd:rgba(255,255,255,.12)">
+                <span class="tcm-bg"></span>
+                <span class="tcm-side"><i></i><i class="on"></i><i></i><i></i></span>
+                <span class="tcm-card"><b></b><u></u><span class="tcm-btn"></span></span>
+              </div>
+              <div class="tc-foot">
+                <span class="tc-name"><span class="tc-check"><span class="material-icons-round">check</span></span>Mono</span>
+                <span class="tc-sws"><span class="tc-sw" style="background:#141414"></span><span class="tc-sw" style="background:#c4c4c4"></span><span class="tc-sw" style="background:#ffffff"></span></span>
               </div>
             </div>
             <div class="theme-card" data-theme="midnight" onclick="setTheme('midnight')" role="button" tabindex="0" aria-label="Midnight theme">

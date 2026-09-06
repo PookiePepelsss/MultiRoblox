@@ -34,6 +34,11 @@ pub struct UserInfo {
     pub username: Option<String>,
     pub user_id: Option<String>,
     pub reason: Option<String>,
+    /// False only when Roblox could not be reached at all (DNS failure,
+    /// timeout, no route). Callers must not treat that as "the cookie is
+    /// dead": a dropped wifi connection would otherwise flag every account
+    /// as expired. True means Roblox answered, so `ok` is its real verdict.
+    pub reachable: bool,
 }
 
 pub async fn fetch_user_info(state: &AppState, cookie: &str) -> UserInfo {
@@ -51,6 +56,7 @@ pub async fn fetch_user_info(state: &AppState, cookie: &str) -> UserInfo {
             match serde_json::from_str::<Value>(&body) {
                 Ok(d) if d.get("id").is_some() => UserInfo {
                     ok: true,
+                    reachable: true,
                     username: d
                         .get("name")
                         .and_then(|v| v.as_str())
@@ -62,16 +68,21 @@ pub async fn fetch_user_info(state: &AppState, cookie: &str) -> UserInfo {
                     }),
                     reason: None,
                 },
+                // Roblox answered but the body isn't an authenticated user;
+                // that is a genuine rejection, so reachable stays true.
                 _ => UserInfo {
                     ok: false,
+                    reachable: true,
                     username: None,
                     user_id: None,
                     reason: Some(extract_roblox_error(&body)),
                 },
             }
         }
+        // Never reached Roblox, so we learned nothing about the cookie.
         Err(e) => UserInfo {
             ok: false,
+            reachable: false,
             username: None,
             user_id: None,
             reason: Some(e.to_string()),

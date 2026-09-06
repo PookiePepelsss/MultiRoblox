@@ -42,6 +42,16 @@ pub struct AppState {
     pub launch_cancel: Mutex<HashMap<String, Arc<AtomicBool>>>,
 
     pub login_cancel: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+
+    /// Set by the tray's Quit item and the quit_app command, so the window's
+    /// CloseRequested handler knows this close is a real exit and must not be
+    /// swallowed into a hide-to-tray.
+    pub quitting: AtomicBool,
+
+    /// Set once the frontend has asked for the window to be shown, i.e. it
+    /// booted. The startup safety net uses this to tell "the UI never came up"
+    /// from "the UI came up and the user hid it to tray".
+    pub ui_ready: AtomicBool,
 }
 
 impl AppState {
@@ -88,6 +98,8 @@ impl AppState {
             launch_lock: tokio::sync::Mutex::new(()),
             launch_cancel: Mutex::new(HashMap::new()),
             login_cancel: Mutex::new(None),
+            quitting: AtomicBool::new(false),
+            ui_ready: AtomicBool::new(false),
         }
     }
 }

@@ -10,7 +10,11 @@
   window.api = {
     minimize: () => win.minimize(),
     maximize: () => win.toggleMaximize(),
+    // Raises CloseRequested, which the backend turns into a hide when
+    // "hide to system tray" is on and a real close otherwise.
     close: () => win.close(),
+    quitApp: () => invoke('quit_app'),
+    setHideToTray: (enabled) => invoke('set_hide_to_tray', { enabled }),
 
     loadAccounts: () => invoke('accounts_load'),
     addAccount: (account) => invoke('accounts_add', { account }),

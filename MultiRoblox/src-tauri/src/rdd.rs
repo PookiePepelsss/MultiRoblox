@@ -88,6 +88,27 @@ pub async fn install_version(
         return Ok(serde_json::json!({ "ok": true, "version": hash, "alreadyInstalled": true }));
     }
 
+    // A half-written version folder is worse than none at all: RobloxApp.zip
+    // (which carries RobloxPlayerBeta.exe) is the first package extracted, so
+    // a failure on any later one leaves a folder that list_versions reports as
+    // installed and the launcher will happily run, minus most of its content.
+    // The "alreadyInstalled" check above keys on that same exe, so re-running
+    // the install would decline to repair it. Roll the folder back instead, so
+    // a failed install leaves nothing behind and can simply be retried.
+    let result = install_packages(app, state, &hash, &dest).await;
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&dest);
+    }
+    result
+}
+
+async fn install_packages(
+    app: &AppHandle,
+    state: &AppState,
+    hash: &str,
+    dest: &Path,
+) -> Result<serde_json::Value, String> {
+    let hash = hash.to_string();
     progress(app, 0, 1, "Fetching manifest");
     let manifest_url = format!("{}/{}-rbxPkgManifest.txt", HOST, hash);
     let res = state
@@ -144,7 +165,7 @@ pub async fn install_version(
             .map_err(|e| format!("{pkg}: download failed: {e}"))?;
 
         let out_dir = if sub.is_empty() {
-            dest.clone()
+            dest.to_path_buf()
         } else {
             dest.join(sub.trim_end_matches('/').replace('/', std::path::MAIN_SEPARATOR_STR))
         };

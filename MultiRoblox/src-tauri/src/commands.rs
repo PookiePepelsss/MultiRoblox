@@ -7,9 +7,29 @@ use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 pub fn show_main_window(app: tauri::AppHandle) {
+    app.state::<AppState>()
+        .ui_ready
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
     }
+}
+
+/// Real exit, from the in-app Quit affordance. Sets the flag first so the
+/// hide-to-tray close handler and prevent_exit both stand aside.
+#[tauri::command]
+pub fn quit_app(app: tauri::AppHandle) {
+    app.state::<AppState>()
+        .quitting
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    app.exit(0);
+}
+
+/// Creates or removes the tray icon to match the toggle. The setting itself is
+/// persisted by settings_save; this only reconciles the icon.
+#[tauri::command]
+pub fn set_hide_to_tray(app: tauri::AppHandle, enabled: bool) {
+    crate::tray::apply_setting(&app, enabled);
 }
 
 // ---- settings ----
@@ -198,6 +218,11 @@ pub fn accounts_remove(state: State<AppState>, id: String) -> Result<bool, Strin
         .filter(|a| a.get("id").and_then(|v| v.as_str()) != Some(id.as_str()))
         .collect();
     storage::save_accounts(&state, filtered)?;
+    // Signal any launch already in flight (or still queued behind
+    // launch_lock, which a mass-launch can hold for many seconds) to abandon
+    // itself, so deleting an account stops a launch that is mid-flight rather
+    // than letting it finish and spawn the removed account.
+    crate::native::cancel_launch(&state, &id);
     // Drop bookkeeping so watch_tick stops polling a removed account.
     state.account_pids.lock().unwrap().remove(&id);
     state.watched_accounts.lock().unwrap().remove(&id);
@@ -424,7 +449,7 @@ pub async fn roblox_validate_cookie(
 ) -> Result<Value, ()> {
     let info = crate::roblox_api::fetch_user_info(&state, &cookie).await;
     Ok(
-        serde_json::json!({ "ok": info.ok, "username": info.username, "userId": info.user_id, "reason": info.reason }),
+        serde_json::json!({ "ok": info.ok, "reachable": info.reachable, "username": info.username, "userId": info.user_id, "reason": info.reason }),
     )
 }
 

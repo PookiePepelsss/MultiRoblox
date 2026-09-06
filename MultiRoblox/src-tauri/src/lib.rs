@@ -12,6 +12,7 @@ mod settings;
 mod state;
 mod storage;
 mod tracking;
+mod tray;
 
 use state::AppState;
 use tauri::Manager;
@@ -90,6 +91,16 @@ pub fn run() {
             let handle4 = handle.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                // Only rescue a frontend that never booted. Once it has shown
+                // itself once, an invisible window is a deliberate hide to
+                // tray, and forcing it back would undo the user's action.
+                if handle4
+                    .state::<AppState>()
+                    .ui_ready
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    return;
+                }
                 if let Some(w) = handle4.get_webview_window("main") {
                     if !w.is_visible().unwrap_or(true) {
                         let _ = w.show();
@@ -98,10 +109,49 @@ pub fn run() {
                 }
             });
 
+            // Only built when the user has asked for it; see tray.rs.
+            if tray::hide_to_tray_enabled() {
+                if let Err(e) = tray::ensure_tray(&handle) {
+                    eprintln!("[tray] {e}");
+                }
+            }
+
+            // The window is borderless, so this fires for the titlebar's X and
+            // for Alt+F4 alike. Swallowing the close is what "hide to tray"
+            // means; the quitting flag lets the tray's Quit item and the
+            // in-app quit get through the same handler.
+            if let Some(main) = handle.get_webview_window("main") {
+                let handle5 = handle.clone();
+                main.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        let quitting = handle5
+                            .state::<AppState>()
+                            .quitting
+                            .load(std::sync::atomic::Ordering::SeqCst);
+                        // The tray icon must actually exist before hiding: it
+                        // is the only way back once the window is gone and the
+                        // taskbar entry with it. If creating it failed, fall
+                        // through to a normal close rather than stranding the
+                        // app with no way to reach or quit it.
+                        if !quitting
+                            && tray::hide_to_tray_enabled()
+                            && tray::ensure_tray(&handle5).is_ok()
+                        {
+                            api.prevent_close();
+                            if let Some(w) = handle5.get_webview_window("main") {
+                                let _ = w.hide();
+                            }
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::show_main_window,
+            commands::quit_app,
+            commands::set_hide_to_tray,
             commands::settings_load,
             commands::settings_save,
             commands::enc_status,
@@ -164,7 +214,17 @@ pub fn run() {
                     // exit whenever the main window is still present; if the user
                     // closed the main window itself it's already destroyed here
                     // and we fall through to a normal exit.
-                    if app_handle.get_webview_window("main").is_some() {
+                    //
+                    // The quitting flag is the deliberate way out: with
+                    // hide-to-tray on, the main window survives a close, so
+                    // without this check the tray's Quit (and the in-app quit)
+                    // would hit that same prevent_exit and the app could never
+                    // be closed at all.
+                    let quitting = app_handle
+                        .state::<AppState>()
+                        .quitting
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    if !quitting && app_handle.get_webview_window("main").is_some() {
                         api.prevent_exit();
                     }
                 }

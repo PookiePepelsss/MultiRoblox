@@ -256,6 +256,9 @@ pub async fn stop_all_native_helpers(state: &AppState) {
 // accounts that no longer exist, etc). Deliberately leaves login_cancel
 // alone; an in-progress login window closing on its own is harmless.
 pub fn reset_state_for_wipe(state: &AppState) {
+    // A launch still queued when the user wipes would otherwise run on
+    // through its network work before do_launch's storage check rejects it.
+    cancel_all_launches(state);
     *state.session_pass.lock().unwrap() = None;
     *state.cached_key.lock().unwrap() = None;
     *state.cached_legacy_key.lock().unwrap() = None;
@@ -646,6 +649,10 @@ async fn wait_for_pids_closed(
 }
 
 pub async fn kill_all_roblox(app: &AppHandle, state: &AppState) -> Value {
+    // First, so a launch that is mid-flight or waiting its turn bails at its
+    // next checkpoint instead of spawning after we have already killed and
+    // reported. Without this, kill during a package launch is not a stop.
+    cancel_all_launches(state);
     let watched_ids: Vec<String> = state
         .watched_accounts
         .lock()
@@ -704,6 +711,9 @@ pub async fn kill_all_roblox(app: &AppHandle, state: &AppState) -> Value {
 }
 
 pub async fn kill_account_roblox(app: &AppHandle, state: &AppState, account_id: &str) -> Value {
+    // Same reasoning as kill_all_roblox: killing an account whose launch has
+    // not finished must abandon that launch, not race it.
+    cancel_launch(state, account_id);
     let pid = state.account_pids.lock().unwrap().remove(account_id);
     state.watched_accounts.lock().unwrap().remove(account_id);
     state.miss_counts.lock().unwrap().remove(account_id);
@@ -1014,20 +1024,6 @@ async fn watch_tick(app: &AppHandle) {
 
     let now = now_ms();
     let mut closed: Vec<String> = Vec::new();
-    // All PIDs we've attributed to any account, watched or not. A newly
-    // launched account has its PID inserted into account_pids before
-    // watch_roblox() is called; excluding not-yet-watched accounts from
-    // this set would let a tick racing that window steal the fresh PID and
-    // assign it to a different account that happens to need one.
-    let claimed: std::collections::HashSet<u32> =
-        state.account_pids.lock().unwrap().values().copied().collect();
-    let mut orphans: Vec<u32> = alive_pids
-        .iter()
-        .filter(|p| !claimed.contains(p))
-        .copied()
-        .collect();
-
-    let any_running = !alive_pids.is_empty();
     let watched_snapshot: Vec<(String, i64)> = state
         .watched_accounts
         .lock()
@@ -1039,34 +1035,25 @@ async fn watch_tick(app: &AppHandle) {
         if now < ready_at {
             continue;
         }
-        let pid = state.account_pids.lock().unwrap().get(&account_id).copied();
-        // No tracked PID means this account launched via the URI-handler
-        // fallback (direct spawn failed or Roblox wasn't found at the
-        // expected install path); we can't identify which specific process
-        // is "ours", so fall back to the coarse "is anything running at all"
-        // signal instead of declaring it closed outright.
-        let mut running = match pid {
-            Some(p) => alive_pids.contains(&p),
-            None => any_running,
+        // An account is running iff the exact process this app spawned for it
+        // is still alive. watch_roblox() is only ever called from do_launch
+        // after account_pids.insert, so a watched account always has a PID and
+        // there is nothing to guess at.
+        //
+        // This used to fall back to "is any Roblox alive at all" and to adopt
+        // an unclaimed PID when the tracked one died, both to cover accounts
+        // launched through the roblox-player: URI handler, where the spawned
+        // process could not be identified. That fallback is gone (it was what
+        // triggered Roblox's own installer), and with it the only case those
+        // branches legitimately served. What they still did was misattribute a
+        // Roblox the user started themselves: once a tracked instance exited,
+        // the next tick handed that unrelated process to the account, so the
+        // app reported it as running and, worse, would taskkill someone's own
+        // Roblox on Kill Roblox, which is explicitly not ours to touch.
+        let running = match state.account_pids.lock().unwrap().get(&account_id) {
+            Some(p) => alive_pids.contains(p),
+            None => false,
         };
-        // Adopt an unclaimed PID whenever we don't have one at all (not just
-        // when a previously-tracked one died). do_launch's own post-fallback
-        // poll (wait_for_new_roblox_pid) is now the primary way a
-        // URI-handler-launched account gets attributed a real PID right
-        // away; this is just the secondary net for the rare case where
-        // Roblox took longer than that poll's window to actually start.
-        // Same "adopt any unclaimed orphan" ambiguity the original
-        // died-PID reassignment already accepted; rare and last-resort
-        // now, not the primary mechanism.
-        if !orphans.is_empty() && (pid.is_none() || !running) {
-            let adopted = orphans.remove(0);
-            state
-                .account_pids
-                .lock()
-                .unwrap()
-                .insert(account_id.clone(), adopted);
-            running = true;
-        }
         if !running {
             let misses = {
                 let mut mc = state.miss_counts.lock().unwrap();
@@ -1169,6 +1156,17 @@ pub fn finish_launch(state: &AppState, account_id: &str) {
     state.launch_cancel.lock().unwrap().remove(account_id);
 }
 
+/// Abandons every launch currently registered, in flight or still queued
+/// behind launch_lock. Kill-all otherwise only reaps what has already
+/// spawned: a package launch serializes on the lock with a stagger between
+/// each, so killing partway through leaves the remaining ones to start up
+/// afterwards, and instances reappear seconds after the user killed them.
+pub fn cancel_all_launches(state: &AppState) {
+    for flag in state.launch_cancel.lock().unwrap().values() {
+        flag.store(true, Ordering::SeqCst);
+    }
+}
+
 pub fn cancel_launch(state: &AppState, account_id: &str) -> bool {
     match state.launch_cancel.lock().unwrap().get(account_id) {
         Some(flag) => {
@@ -1200,6 +1198,47 @@ pub async fn do_launch(
     cookie: &str,
     target: &str,
 ) -> Value {
+    // Storage is the authority on which account this is, not the caller.
+    // Every launch path hands us a cookie captured earlier from a copy of the
+    // account: the launch modal's `launchAcc`, a package's resolved member
+    // list, or the auto-relaunch task that snapshots cookie+target before it
+    // queues on launch_lock. Any of those copies can outlive a delete, and
+    // because the cookie alone decides which Roblox account the auth ticket
+    // signs in, a stale one silently launches an account the user removed.
+    // Re-read it here and refuse if it's gone.
+    let stored = {
+        let accounts = crate::storage::load_accounts(state);
+        accounts
+            .iter()
+            .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(account_id))
+            .cloned()
+    };
+    let Some(stored) = stored else {
+        emit_log(
+            app,
+            "warn",
+            "launch",
+            "Launch skipped: this account was removed",
+            Some(serde_json::json!({ "accountId": account_id })),
+        );
+        return serde_json::json!({ "success": false, "error": "This account no longer exists." });
+    };
+    // Prefer the stored cookie over the caller's; they normally match, but if
+    // the account was edited since the caller took its copy, stored is right.
+    // Falls back to the passed one only when the stored cookie is unreadable
+    // (failed decrypt leaves it empty), so this can't make a launch that used
+    // to work start failing.
+    let stored_cookie = stored
+        .get("cookie")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let cookie: &str = if stored_cookie.is_empty() {
+        cookie
+    } else {
+        &stored_cookie
+    };
+
     // Mutex only here. The singleton-handle scan is deliberately NOT done
     // yet; see the call just before the spawn loop below.
     start_mutex_holder(app, state).await;
